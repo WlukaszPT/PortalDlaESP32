@@ -14,13 +14,13 @@ Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywnośc
 
 ## Kroki do realizacji
 
-1. **Założenie kont i struktury repozytorium.** Konto Supabase (logowanie przez GitHub), nowy projekt w regionie EU (Frankfurt). W repo katalogi `web/`, `firmware/`, `database/` i opis w README.
+1. **Założenie kont i struktury repozytorium.** Konto Supabase (logowanie przez GitHub), nowy projekt w regionie EU (Frankfurt). W repo katalogi `web/`, `firmware/`, `supabase/` i opis w README.
 
 2. **Projekt bazy danych.** Tabele:
    - `devices` (id, nazwa, `device_key` jako sekret urządzenia, `last_seen`),
    - `readings` (id, device_id, czas, `data` jako JSONB),
    - `commands` (id, device_id, czas, `payload` jako JSONB/tekst do kilku kB, `status`: nowe / odebrane / wykonane).
-   Skrypt SQL trzymamy w `database/schema.sql`.
+   Skrypt SQL trzymamy w `supabase/migrations/`.
 
 3. **Bezpieczeństwo i dostęp (RLS).** Włączenie Row Level Security na wszystkich tabelach. Strona działa tylko dla zalogowanego użytkownika (Supabase Auth, e‑mail). ESP32 nie dostaje klucza administracyjnego: korzysta z funkcji SQL (RPC), np. `device_push_reading(key, data)` i `device_fetch_commands(key)`, które sprawdzają `device_key`.
 

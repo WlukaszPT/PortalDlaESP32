@@ -13,7 +13,7 @@ Całość działa na darmowych usługach: **Supabase** (baza Postgres z API) i *
 |---|---|
 | `web/` | Strona www (HTML/JS), publikowana na GitHub Pages |
 | `firmware/portal_esp32/` | Program dla ESP32 (Arduino IDE / PlatformIO) |
-| `database/` | Skrypty SQL bazy danych Supabase (tabele, uprawnienia, funkcje) |
+| `supabase/migrations/` | Migracje SQL bazy Supabase (tabele, uprawnienia, funkcje), wgrywane automatycznie z gałęzi `main` |
 | `docs/` | Dokumentacja i plan projektu |
 
 ## Plan
