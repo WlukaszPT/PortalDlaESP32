@@ -1,0 +1,3 @@
+# Minimalna konfiguracja Supabase CLI / integracji z GitHubem.
+# Pozostałe ustawienia mają wartości domyślne.
+project_id = "portal-esp32"

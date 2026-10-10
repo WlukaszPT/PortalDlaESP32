@@ -1,0 +1,16 @@
+# Dane dostępowe ESP32
+firmware/**/secrets.h
+
+# PlatformIO / Arduino
+.pio/
+build/
+
+# Lokalne zmienne środowiskowe
+.env
+.env.*
+
+# System / edytory
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
