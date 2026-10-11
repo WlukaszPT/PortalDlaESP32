@@ -868,25 +868,49 @@ async function tabReadings(el, inv, mode) {
     numeric.forEach((m) => {
       const pts = current.filter((r) => typeof r.data?.[m.key] === 'number');
       const ctx = body.querySelector(`[data-chart="${CSS.escape(m.key)}"]`);
+      // Na osi same godziny; przy zakresie dłuższym niż doba dodajemy dzień, żeby godziny się nie myliły.
+      const multiDay = pts.length > 1 && new Date(pts.at(-1).created_at) - new Date(pts[0].created_at) > 86400000;
+      const tick = (iso) => new Date(iso).toLocaleString('pl-PL', multiDay
+        ? { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }
+        : { hour: '2-digit', minute: '2-digit' });
       charts.push(new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: {
-          labels: pts.map((r) => fmtDate(r.created_at)),
+          labels: pts.map((r) => tick(r.created_at)),
           datasets: [{
-            label: m.label, data: pts.map((r) => r.data[m.key]),
-            borderColor: '#00ffff', backgroundColor: 'rgba(0,255,255,0.12)', fill: true, tension: 0.3,
-            pointRadius: pts.length > 60 ? 0 : 3, borderWidth: 2,
+            // Najpierw słupki na dole osi; prawdziwe wartości wstawiamy, gdy układ strony się ustali (niżej).
+            label: m.label, data: pts.map(() => null),
+            backgroundColor: 'rgba(0,255,255,0.55)', hoverBackgroundColor: '#00ffff',
+            borderColor: '#00ffff', borderWidth: { top: 2, left: 0, right: 0, bottom: 0 },
+            borderRadius: { topLeft: 3, topRight: 3 }, borderSkipped: 'bottom',
+            categoryPercentage: 0.9, barPercentage: 0.85,
           }],
         },
         options: {
-          responsive: true, maintainAspectRatio: false, animation: false,
-          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${fmtValue(m, c.parsed.y)}${m.unit ? ` ${m.unit}` : ''}` } } },
+          responsive: true, maintainAspectRatio: false,
+          // Słupki rosną od zera do wartości przez 3 sekundy po wejściu na wykresy.
+          animation: { duration: 3000, easing: 'easeOutCubic' },
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: {
+              title: (items) => fmtDate(pts[items[0].dataIndex].created_at),
+              label: (c) => `${fmtValue(m, c.parsed.y)}${m.unit ? ` ${m.unit}` : ''}`,
+            } },
+          },
           scales: {
-            x: { ticks: { maxTicksLimit: 6, color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+            x: { ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#8a8f99' }, grid: { display: false } },
             y: { ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' }, beginAtZero: m.value_type === 'integer' },
           },
         },
       }));
+      const chart = charts.at(-1);
+      // Wzrost słupków od zera do wartości przez 3 s. Startujemy po ustaleniu układu,
+      // bo zmiana rozmiaru wykresu w trakcie przerwałaby animację.
+      setTimeout(() => {
+        if (!chart.canvas?.isConnected) return;
+        chart.data.datasets[0].data = pts.map((r) => r.data[m.key]);
+        chart.update();
+      }, 150);
     });
   };
 
