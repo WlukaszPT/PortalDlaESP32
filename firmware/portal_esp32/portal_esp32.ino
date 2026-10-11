@@ -1,7 +1,9 @@
 // CloudEA – program testowy dla ESP32 (płytka ESP32 DevKit, Arduino IDE).
 //
 // Co robi:
-//  - co 20 s zwiększa "counter" o 1, losuje "napiecie" (11,8–13,2 V) i wysyła oba do bazy,
+//  - co 20 s zwiększa "counter" (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3), losuje "napiecie"
+//    (11,8–13,2 V) i wysyła oba do bazy; counter idzie do bazy w całościach (23,3 -> 23),
+//  - o północy (czas polski z internetu) counter wraca do zera,
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
 //    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s.
 //
@@ -13,6 +15,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Ticker.h>
+#include <time.h>
 
 #include "secrets.h"
 #include "root_ca.h"
@@ -23,12 +26,19 @@ const unsigned long READING_INTERVAL_MS = 20000;  // wysyłanie odczytu
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
 const float LED_ON_S = 10.0;  // świecenie diody po poleceniu ze strony
 
+// Czas polski (zimą CET, latem CEST) z serwerów NTP.
+const char* TIMEZONE = "CET-1CEST,M3.5.0,M10.5.0/3";
+const int DAY_START_HOUR = 7;   // od 7:00 counter rośnie o 1
+const int DAY_END_HOUR   = 19;  // od 19:00 counter rośnie o 0,3
+
 // Nazwy danych w bazie dla typu AllinOne (zakładka Urządzenia → wybór danych).
 const char* METRIC_COUNTER = "activations";      // Ilość uruchomień
 const char* METRIC_VOLTAGE = "battery_voltage";  // Napięcie akumulatora
 const char* CMD_TURN_ON    = "turn on";          // polecenie z przycisku na stronie
 
-long  counter = 0;
+// Counter liczony w dziesiątych częściach (10 = 1,0; 3 = 0,3), żeby uniknąć błędów zaokrągleń.
+long  counterTenths = 0;
+int   counterDay = -1;  // dzień roku, w którym liczymy (do zerowania o północy)
 float napiecie = 0;
 bool  tornOn = false;
 
@@ -89,8 +99,35 @@ int callRpc(const char* function, const JsonDocument& body, String& response) {
   return code;
 }
 
+// ───────────── Czas ─────────────
+
+bool localTimeNow(struct tm& now) {
+  return getLocalTime(&now, 100);  // false, dopóki zegar nie pobrał czasu z internetu
+}
+
+// ───────────── Odczyty ─────────────
+
+void updateCounter() {
+  struct tm now;
+  if (!localTimeNow(now)) {
+    Serial.println("Brak aktualnego czasu, licznik +1");
+    counterTenths += 10;
+    return;
+  }
+
+  if (counterDay != now.tm_yday) {
+    if (counterDay != -1) Serial.println("Północ: zeruję counter");
+    counterDay = now.tm_yday;
+    counterTenths = 0;
+  }
+
+  bool day = now.tm_hour >= DAY_START_HOUR && now.tm_hour < DAY_END_HOUR;
+  counterTenths += day ? 10 : 3;
+}
+
 void sendReading() {
-  counter++;
+  updateCounter();
+  long counter = counterTenths / 10;  // do bazy tylko całości: 23,3 -> 23
   napiecie = random(1180, 1321) / 100.0;  // 11,80–13,20 V
 
   JsonDocument body;
@@ -100,8 +137,8 @@ void sendReading() {
 
   String response;
   int code = callRpc("device_push_reading", body, response);
-  Serial.printf("Odczyt: counter=%ld, napiecie=%.2f V -> HTTP %d %s\n",
-                counter, napiecie, code, response.c_str());
+  Serial.printf("Odczyt: counter=%.1f (wysłano %ld), napiecie=%.2f V -> HTTP %d %s\n",
+                counterTenths / 10.0, counter, napiecie, code, response.c_str());
 }
 
 void ackCommand(long id, bool ok, const char* result) {
@@ -170,6 +207,7 @@ void setup() {
 
   tls.setCACert(ROOT_CA);
   connectWiFi();
+  configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 }
 
 void loop() {
