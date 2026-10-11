@@ -809,6 +809,18 @@ const RANGES = [
 // W widoku godzinowym pokazujemy ich przyrost w każdej godzinie, a pozostałe dane jako średnią.
 const COUNTER_KEYS = ['activations', 'pedestrians'];
 
+// Znaczniki osi czasu w pełnych godzinach (lokalnych), co 1–24 h albo co dobę, maks. ok. 8 znaczników.
+function hourTicks(from, to) {
+  const hours = (to - from) / 3600000;
+  const step = [1, 2, 3, 6, 12, 24, 48, 168].find((h) => hours / h <= 8) ?? 168;
+  const t = new Date(from); t.setMinutes(0, 0, 0);
+  if (t < from) t.setHours(t.getHours() + 1);
+  while (step < 24 ? t.getHours() % step : t.getHours()) t.setHours(t.getHours() + 1);
+  const out = [];
+  for (; t <= to; t.setHours(t.getHours() + step)) out.push(+t);
+  return out;
+}
+
 // Odczyty jednej wielkości zebrane w godziny: [{ start: Date, value }].
 // Pokazujemy każdą godzinę zakresu, także bez odczytów (licznik 0, średnia pusta).
 function hourlySeries(pts, key, from, to) {
@@ -903,18 +915,21 @@ async function tabReadings(el, inv, mode) {
         })
         : raw.map((r) => ({ at: new Date(r.created_at), value: r.data[m.key], title: fmtDate(r.created_at) }));
       const ctx = body.querySelector(`[data-chart="${CSS.escape(m.key)}"]`);
+      // Wykres rzeczywisty ma prawdziwą oś czasu: pełne godziny zakresu, a przerwy w danych zostają puste.
+      const xMin = fromH ? Date.now() - fromH * 3600000 : +(pts[0]?.at ?? Date.now());
+      const xMax = Date.now() - toH * 3600000;
       // Na osi same godziny; przy zakresie dłuższym niż doba dodajemy dzień, żeby godziny się nie myliły.
-      const multiDay = pts.length > 1 && pts.at(-1).at - pts[0].at > 86400000;
+      const multiDay = hourly ? pts.length > 1 && pts.at(-1).at - pts[0].at > 86400000 : xMax - xMin > 86400000 + 60000;
       const tick = (t) => t.toLocaleString('pl-PL', multiDay
         ? { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }
         : { hour: '2-digit', minute: '2-digit' });
       charts.push(new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: pts.map((p) => tick(p.at)),
+          labels: hourly ? pts.map((p) => tick(p.at)) : undefined,
           datasets: [{
             // Najpierw słupki na dole osi; prawdziwe wartości wstawiamy, gdy układ strony się ustali (niżej).
-            label: m.label, data: pts.map(() => null),
+            label: m.label, data: hourly ? pts.map(() => null) : pts.map((p) => ({ x: +p.at, y: null })),
             backgroundColor: 'rgba(0,255,255,0.55)', hoverBackgroundColor: '#00ffff',
             borderColor: '#00ffff', borderWidth: { top: 2, left: 0, right: 0, bottom: 0 },
             borderRadius: { topLeft: 3, topRight: 3 }, borderSkipped: 'bottom',
@@ -933,7 +948,18 @@ async function tabReadings(el, inv, mode) {
             } },
           },
           scales: {
-            x: { ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#8a8f99' }, grid: { display: false } },
+            x: hourly
+              ? { ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#8a8f99' }, grid: { display: false } }
+              : {
+                type: 'linear', min: xMin, max: xMax, offset: false,
+                afterBuildTicks: (sc) => { sc.ticks = hourTicks(xMin, xMax).map((value) => ({ value })); },
+                ticks: {
+                  autoSkip: false, maxRotation: 0, color: '#8a8f99',
+                  // Przy kilku dniach północ podpisujemy datą, pozostałe znaczniki samą godziną.
+                  callback: (v) => { const t = new Date(v); return multiDay && !t.getHours() ? t.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }) : t.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }); },
+                },
+                grid: { color: 'rgba(255,255,255,0.04)' },
+              },
             y: { ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' }, beginAtZero: m.value_type === 'integer' || (hourly && COUNTER_KEYS.includes(m.key)) },
           },
         },
@@ -943,7 +969,16 @@ async function tabReadings(el, inv, mode) {
       // bo zmiana rozmiaru wykresu w trakcie przerwałaby animację.
       setTimeout(() => {
         if (!chart.canvas?.isConnected) return;
-        chart.data.datasets[0].data = pts.map((p) => p.value);
+        const ds = chart.data.datasets[0];
+        if (hourly) ds.data = pts.map((p) => p.value);
+        else {
+          ds.data = pts.map((p) => ({ x: +p.at, y: p.value }));
+          // Szerokość słupka z typowego odstępu między odczytami, żeby gęste dane nie zlewały się w jedną plamę.
+          const gaps = pts.slice(1).map((p, i) => p.at - pts[i].at).sort((a, b) => a - b);
+          const gap = gaps[Math.floor(gaps.length / 2)] || 3600000;
+          const width = chart.chartArea.right - chart.chartArea.left;
+          ds.barThickness = Math.max(1, Math.min(16, Math.floor((width * gap) / (xMax - xMin) * 0.8)));
+        }
         chart.update();
       }, 150);
     });
