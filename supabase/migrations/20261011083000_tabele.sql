@@ -1,8 +1,9 @@
 -- Krok 2: tabele portalu ESP32.
 --
 -- Model danych:
---   inwestycja (np. "Stare Juchy")
---     └─ urządzenia (produkt danego typu, np. AllinOne) z kluczem PL-123456789
+--   inwestycja (np. "Stare Juchy") ze współrzędnymi i galerią zdjęć (do 5)
+--     └─ urządzenia (produkt danego typu, np. AllinOne); te łączące się ze stroną
+--        mają klucz PL-123456789, pozostałe (Lite4, pasywne) są tylko informacyjne
 --          ├─ wybrane dane, które urządzenie ma wysyłać (device_metrics)
 --          ├─ odczyty wysłane przez ESP32 (readings)
 --          └─ polecenia/dane dla ESP32 (commands)
@@ -15,18 +16,20 @@
 create table public.product_types (
     code        text primary key,
     name        text not null,
+    connected   boolean not null,
     sort_order  int  not null default 0
 );
 
-comment on table public.product_types is 'Typy produktów (sterowników ESP32)';
+comment on table public.product_types is 'Typy produktów; connected = łączy się ze stroną (ESP32)';
+comment on column public.product_types.connected is 'false: urządzenie tylko informacyjne, bez klucza i danych';
 
-insert into public.product_types (code, name, sort_order) values
-    ('allinone',         'AllinOne',                    1),
-    ('dale',             'Sterownik doświetlenia Dale', 2),
-    ('lite4',            'Lite4',                       3),
-    ('active_lighting',  'Aktywne doświetlenie',        4),
-    ('passive_lighting', 'Pasywne doświetlenie',        5),
-    ('bikedale',         'Sterownik BikeDale',          6);
+insert into public.product_types (code, name, connected, sort_order) values
+    ('allinone',         'AllinOne',                    true,  1),
+    ('dale',             'Sterownik doświetlenia Dale', true,  2),
+    ('lite4',            'Lite4',                       false, 3),
+    ('active_lighting',  'Aktywne doświetlenie',        true,  4),
+    ('passive_lighting', 'Pasywne doświetlenie',        false, 5),
+    ('bikedale',         'Sterownik BikeDale',          true,  6);
 
 -- Katalog danych (pomiarów), które może wysyłać dany typ produktu.
 -- value_type: integer | number | text | enum (dla enum dozwolone wartości w allowed_values).
@@ -56,7 +59,7 @@ insert into public.product_metrics (product_type, key, label, unit, value_type, 
     ('bikedale', 'eyes_count',      'Ilość oczek',                     null, 'integer', null, 2),
     ('bikedale', 'light_mode',      'Tryb świecenia',                  null, 'enum',
         array['wszystkie', 'kaskada', 'stroboskop'], 3);
--- Lite4, aktywne i pasywne doświetlenie: dane dopiszemy, gdy będą znane.
+-- Aktywne doświetlenie: dane dopiszemy, gdy będą znane. Lite4 i pasywne nie wysyłają danych.
 
 -- ───────────── Inwestycje ─────────────
 
@@ -64,10 +67,46 @@ create table public.investments (
     id          uuid primary key default gen_random_uuid(),
     name        text not null check (length(name) between 1 and 200),
     notes       text,
-    created_at  timestamptz not null default now()
+    latitude    double precision check (latitude between -90 and 90),
+    longitude   double precision check (longitude between -180 and 180),
+    created_at  timestamptz not null default now(),
+    check ((latitude is null) = (longitude is null))
 );
 
 comment on table public.investments is 'Inwestycje, np. "Stare Juchy"';
+comment on column public.investments.latitude is 'Szerokość geograficzna (WGS84), pinezka na mapie';
+
+-- Galeria inwestycji: do 5 zdjęć. Pliki leżą w Supabase Storage
+-- (bucket utworzymy w kroku 3 razem z uprawnieniami), tu tylko ich ścieżki.
+create table public.investment_photos (
+    id             uuid primary key default gen_random_uuid(),
+    investment_id  uuid not null references public.investments (id) on delete cascade,
+    storage_path   text not null unique,
+    caption        text check (length(caption) <= 300),
+    sort_order     int  not null default 0,
+    created_at     timestamptz not null default now()
+);
+
+create index investment_photos_investment_idx on public.investment_photos (investment_id, sort_order);
+
+comment on table public.investment_photos is 'Zdjęcia inwestycji (maks. 5), pliki w Storage';
+
+create function public.investment_photos_limit() returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if (select count(*) from public.investment_photos
+        where investment_id = new.investment_id) >= 5 then
+        raise exception 'Inwestycja może mieć maksymalnie 5 zdjęć';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger investment_photos_limit
+    before insert on public.investment_photos
+    for each row execute function public.investment_photos_limit();
 
 -- ───────────── Urządzenia (produkty w inwestycji) ─────────────
 
@@ -87,8 +126,7 @@ create table public.devices (
     investment_id  uuid not null references public.investments (id) on delete cascade,
     product_type   text not null references public.product_types (code),
     name           text check (length(name) <= 200),
-    device_key     text not null unique default public.generate_device_key()
-                   check (device_key ~ '^PL-[0-9]{9}$'),
+    device_key     text unique check (device_key ~ '^PL-[0-9]{9}$'),
     created_at     timestamptz not null default now(),
     last_seen      timestamptz,
     unique (id, product_type)
@@ -97,7 +135,32 @@ create table public.devices (
 create index devices_investment_idx on public.devices (investment_id);
 
 comment on table public.devices is 'Produkty (sterowniki ESP32) w inwestycjach';
-comment on column public.devices.device_key is 'Klucz wpisywany do kodu ESP32, generowany automatycznie';
+comment on column public.devices.device_key is 'Klucz wpisywany do kodu ESP32; tylko dla typów connected';
+
+-- Klucz nadajemy automatycznie urządzeniom łączącym się ze stroną,
+-- urządzenia informacyjne (Lite4, pasywne) nie mają klucza.
+create function public.devices_set_key() returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if tg_op = 'UPDATE' and new.product_type <> old.product_type then
+        raise exception 'Typu produktu nie można zmienić, usuń urządzenie i dodaj je ponownie';
+    end if;
+    if (select connected from public.product_types where code = new.product_type) then
+        if new.device_key is null then
+            new.device_key := public.generate_device_key();
+        end if;
+    else
+        new.device_key := null;
+    end if;
+    return new;
+end;
+$$;
+
+create trigger devices_set_key
+    before insert or update of product_type, device_key on public.devices
+    for each row execute function public.devices_set_key();
 
 -- Które dane mają przychodzić z danego urządzenia na stronę.
 create table public.device_metrics (
@@ -107,7 +170,7 @@ create table public.device_metrics (
     enabled       boolean not null default true,
     primary key (device_id, metric_key),
     foreign key (device_id, product_type)
-        references public.devices (id, product_type) on delete cascade on update cascade,
+        references public.devices (id, product_type) on delete cascade,
     foreign key (product_type, metric_key)
         references public.product_metrics (product_type, key) on delete cascade
 );

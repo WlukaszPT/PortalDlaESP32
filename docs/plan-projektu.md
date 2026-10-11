@@ -17,9 +17,10 @@ Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywnośc
 1. **Założenie kont i struktury repozytorium.** Konto Supabase (logowanie przez GitHub), nowy projekt w regionie EU (Frankfurt). W repo katalogi `web/`, `firmware/`, `supabase/` i opis w README.
 
 2. **Projekt bazy danych.** Tabele:
-   - `investments`: inwestycje (np. „Stare Juchy”),
+   - `investments`: inwestycje (np. „Stare Juchy”) ze współrzędnymi do mapy,
+   - `investment_photos`: galeria inwestycji (do 5 zdjęć, pliki w Supabase Storage),
    - `product_types` i `product_metrics`: typy produktów (AllinOne, Dale, Lite4, aktywne/pasywne doświetlenie, BikeDale) i dane, które każdy z nich może wysyłać,
-   - `devices`: produkt w inwestycji z automatycznie generowanym kluczem `PL-123456789`, wpisywanym do kodu ESP32,
+   - `devices`: produkt w inwestycji; urządzenia łączące się ze stroną dostają automatycznie klucz `PL-123456789` wpisywany do kodu ESP32, a Lite4 i pasywne doświetlenie są tylko informacyjne (bez klucza),
    - `device_metrics`: które dane mają przychodzić z danego urządzenia na stronę,
    - `readings`: odczyty z ESP32 (JSON),
    - `commands`: dane dla ESP32 (do 8 kB) ze statusem: nowe / odebrane / wykonane / błąd.
@@ -33,7 +34,7 @@ Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywnośc
 
 6. **Firmware ESP32, część 2: odbieranie danych ze strony.** Odpytywanie co 5–10 s o polecenia ze statusem „nowe”, parsowanie `ArduinoJson`, wykonanie (np. przełączenie wyjścia, zapis konfiguracji do pamięci flash przez `Preferences`/LittleFS), potwierdzenie statusem „wykonane”.
 
-7. **Strona www, część 1: logowanie i podgląd danych.** Prosta strona HTML/JS: logowanie, lista urządzeń ze statusem online/offline (na podstawie `last_seen`), tabela ostatnich odczytów i wykres (Chart.js).
+7. **Strona www, część 1: inwestycje i podgląd danych.** Prosta strona HTML/JS: logowanie, lista inwestycji, dodawanie inwestycji i produktów (z kluczem do skopiowania), zakładki: urządzenia ze statusem online/offline (na podstawie `last_seen`), odczyty z wykresem (Chart.js), galeria (do 5 zdjęć) i lokalizacja ze współrzędnymi i pinezką na mapie Polski (Leaflet + OpenStreetMap, darmowe).
 
 8. **Strona www, część 2: wysyłanie danych do ESP32.** Formularz/edytor do tworzenia poleceń i małych paczek danych (z kontrolą rozmiaru, np. do 4 kB), historia poleceń z ich statusem. Opcjonalnie odświeżanie na żywo przez Supabase Realtime zamiast ręcznego odświeżania.
 
