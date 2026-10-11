@@ -9,5 +9,5 @@
 #define SUPABASE_URL      "https://TWOJ-PROJEKT.supabase.co"
 #define SUPABASE_ANON_KEY "twoj_klucz_anon"
 
-// Sekretny klucz tego urządzenia (z tabeli devices, utworzymy w kroku 2-3)
-#define DEVICE_KEY "klucz_urzadzenia"
+// Klucz tego urządzenia ze strony (nadawany automatycznie przy dodaniu produktu)
+#define DEVICE_KEY "PL-000000000"
