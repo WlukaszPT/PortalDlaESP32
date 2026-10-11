@@ -2,8 +2,9 @@
 //
 // Co robi:
 //  - co 20 s zwiększa "counter" o 1, losuje "napiecie" (11,8–13,2 V) i wysyła oba do bazy,
+//  - wbudowana dioda zmienia stan co 1 s (znak, że program działa),
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
-//    ustawia tornOn = true, a ESP32 zapala wbudowaną diodę na 10 s i potwierdza wykonanie.
+//    ustawia tornOn = true, a dioda świeci wtedy bez przerwy 10 s i wraca do migania.
 //
 // Wymagane biblioteki: ArduinoJson (Menedżer bibliotek, wersja 7.x).
 // Przed kompilacją skopiuj secrets.example.h jako secrets.h i uzupełnij dane.
@@ -12,17 +13,17 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Ticker.h>
 
 #include "secrets.h"
 #include "root_ca.h"
 
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2  // ESP32 DevKit: niebieska dioda na GPIO2
-#endif
+const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
 
 const unsigned long READING_INTERVAL_MS = 20000;  // wysyłanie odczytu
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
-const unsigned long LED_ON_MS           = 10000;  // czas świecenia diody
+const float BLINK_INTERVAL_S = 1.0;   // miganie diody
+const float LED_ON_S         = 10.0;  // ciągłe świecenie po poleceniu ze strony
 
 // Nazwy danych w bazie dla typu AllinOne (zakładka Urządzenia → wybór danych).
 const char* METRIC_COUNTER = "activations";      // Ilość uruchomień
@@ -35,9 +36,12 @@ bool  tornOn = false;
 
 unsigned long lastReading = 0;
 unsigned long lastCommandCheck = 0;
-unsigned long ledOnSince = 0;
+volatile bool ledState = false;
 
 WiFiClientSecure tls;
+// Dioda jest sterowana timerami, więc miga równo także wtedy, gdy ESP32 czeka na odpowiedź bazy.
+Ticker blinkTicker;
+Ticker ledOnTicker;
 
 // ───────────── Wi‑Fi ─────────────
 
@@ -127,7 +131,7 @@ void checkCommands() {
     long id = cmd["id"];
     if (cmd["payload"][CMD_TURN_ON] == true) {
       Serial.printf("Polecenie %ld: włącz przejście\n", id);
-      tornOn = true;
+      turnOnLed();
       ackCommand(id, true, "dioda włączona na 10 s");
     } else {
       ackCommand(id, false, "nieznane polecenie");
@@ -137,16 +141,23 @@ void checkCommands() {
 
 // ───────────── Dioda ─────────────
 
-void updateLed() {
-  if (tornOn && ledOnSince == 0) {
-    ledOnSince = millis();
-    digitalWrite(LED_BUILTIN, HIGH);
-  }
-  if (ledOnSince != 0 && millis() - ledOnSince >= LED_ON_MS) {
-    digitalWrite(LED_BUILTIN, LOW);
-    ledOnSince = 0;
-    tornOn = false;
-  }
+void toggleLed() {
+  ledState = !ledState;
+  digitalWrite(LED_PIN, ledState);
+}
+
+void startBlinking() {
+  tornOn = false;
+  blinkTicker.attach(BLINK_INTERVAL_S, toggleLed);
+}
+
+// Wywoływane po poleceniu ze strony: dioda świeci 10 s bez przerwy, potem znowu miga.
+void turnOnLed() {
+  tornOn = true;
+  blinkTicker.detach();
+  ledState = true;
+  digitalWrite(LED_PIN, HIGH);
+  ledOnTicker.once(LED_ON_S, startBlinking);
 }
 
 // ───────────── Program ─────────────
@@ -154,8 +165,9 @@ void updateLed() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  startBlinking();
   randomSeed(esp_random());
 
   tls.setCACert(ROOT_CA);
@@ -175,6 +187,5 @@ void loop() {
     checkCommands();
   }
 
-  updateLed();
   delay(50);
 }
