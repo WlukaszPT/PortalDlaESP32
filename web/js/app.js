@@ -801,7 +801,7 @@ function bindDeviceCards(el, inv, devices) {
 // [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz]
 const RANGES = [
   ['1h', 'Ostatnia godzina', 1, 0], ['prev1h', 'Poprzednia godzina', 2, 1],
-  ['24h', 'Ostatnie 24 h', 24, 0], ['7d', 'Ostatnie 7 dni', 168, 0], ['30d', 'Ostatnie 30 dni', 720, 0],
+  ['8h', 'Ostatnie 8 h', 8, 0], ['24h', 'Ostatnie 24 h', 24, 0], ['7d', 'Ostatnie 7 dni', 168, 0], ['30d', 'Ostatnie 30 dni', 720, 0],
   ['all', 'Wszystkie (maks. 1000)', null, 0],
 ];
 
@@ -859,7 +859,7 @@ async function tabReadings(el, inv, mode) {
     <div class="panel glass">
       <div class="toolbar">
         <label class="lbl">Urządzenie<select class="inp" id="r-dev">${devices.map((d) => `<option value="${d.id}">${esc(d.name || typeOf(d.product_type).name)} · ${esc(typeOf(d.product_type).name)}</option>`).join('')}</select></label>
-        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '24h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '8h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         ${mode === 'table' ? '' : `<label class="lbl">Typ wykresu<select class="inp" id="r-type"><option value="real">Rzeczywisty</option><option value="hourly">Godzinowy</option></select></label>`}
         <span style="flex:1"></span>
         <button class="btn sm" type="button" id="r-refresh">${icon('refresh', 15)} Odśwież</button>
