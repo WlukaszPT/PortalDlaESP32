@@ -5,7 +5,7 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 | Plik | Zawartość |
 |---|---|
 | `index.html` | szkielet strony, biblioteki z CDN (supabase-js, Leaflet, Chart.js) |
-| `css/style.css` | wygląd: ciemny motyw „szklany”, pomarańczowy akcent |
+| `css/style.css` | wygląd: ciemny motyw „szklany”, akcent w kolorze #00FFFF, tło ze zdjęciem drogi |
 | `js/config.js` | adres projektu Supabase i publiczny klucz `publishable` |
 | `js/icons.js` | ikony SVG |
 | `js/app.js` | cała logika: logowanie, menu, pulpit, inwestycje, urządzenia, odczyty, galeria, lokalizacja |
@@ -18,8 +18,10 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 - **Inwestycja** – zakładki:
   - *Urządzenia*: dodawanie produktów, klucz `PL-…` do skopiowania, włączanie/wyłączanie danych, ostatnie wartości, wysyłanie danych JSON do ESP32 i historia,
   - *Odczyty*: wykresy, tabela, eksport CSV,
-  - *Galeria*: do 5 zdjęć (prywatne, zmniejszane przed wysłaniem),
-  - *Lokalizacja*: współrzędne i mapa z pinezką.
+  - *Galeria*: karuzela do 5 zdjęć (prywatne, zmniejszane przed wysłaniem),
+  - *Lokalizacja*: współrzędne i mapa z pinezką,
+  - *Serwis*: historia napraw (data, opis, kto wpisał),
+  - *Dokumentacja*: pliki PDF (prywatne, do 20 MB każdy).
 - **Mapa** – wszystkie inwestycje na mapie Polski.
 
 ## Uruchomienie lokalnie

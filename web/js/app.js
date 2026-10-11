@@ -1,5 +1,5 @@
 import {
-  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, MAX_PHOTOS, MAX_COMMAND_BYTES, ONLINE_MINUTES,
+  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, MAX_COMMAND_BYTES, ONLINE_MINUTES,
 } from './config.js';
 import { icon } from './icons.js';
 
@@ -498,6 +498,8 @@ const TABS = [
   ['odczyty', 'Odczyty', 'chart'],
   ['galeria', 'Galeria', 'image'],
   ['lokalizacja', 'Lokalizacja', 'pin'],
+  ['serwis', 'Serwis', 'wrench'],
+  ['dokumentacja', 'Dokumentacja', 'file'],
 ];
 
 async function pageInvestment(root, id, tab) {
@@ -522,6 +524,8 @@ async function pageInvestment(root, id, tab) {
   if (tab === 'odczyty') await tabReadings(el, inv);
   else if (tab === 'galeria') await tabGallery(el, inv);
   else if (tab === 'lokalizacja') await tabLocation(el, inv);
+  else if (tab === 'serwis') await tabService(el, inv);
+  else if (tab === 'dokumentacja') await tabDocuments(el, inv);
   else await tabDevices(el, inv);
 }
 
@@ -540,10 +544,12 @@ async function editInvestment(inv) {
 }
 
 async function deleteInvestment(inv) {
-  if (!await confirmDialog('Usunąć inwestycję?', `„${inv.name}” zostanie usunięta razem z urządzeniami, odczytami i zdjęciami. Tego nie można cofnąć.`)) return;
+  if (!await confirmDialog('Usunąć inwestycję?', `„${inv.name}” zostanie usunięta razem z urządzeniami, odczytami, zdjęciami, historią serwisu i dokumentacją. Tego nie można cofnąć.`)) return;
   try {
     const photos = await q(sb.from('investment_photos').select('storage_path').eq('investment_id', inv.id));
     if (photos.length) await sb.storage.from(PHOTO_BUCKET).remove(photos.map((p) => p.storage_path));
+    const docs = await q(sb.from('investment_documents').select('storage_path').eq('investment_id', inv.id));
+    if (docs.length) await sb.storage.from(DOC_BUCKET).remove(docs.map((d) => d.storage_path));
     await q(sb.from('investments').delete().eq('id', inv.id));
     toast('Inwestycja usunięta.', 'ok');
     location.hash = '#/inwestycje';
@@ -780,7 +786,7 @@ async function tabReadings(el, inv) {
           labels: pts.map((r) => fmtDate(r.created_at)),
           datasets: [{
             label: m.label, data: pts.map((r) => r.data[m.key]),
-            borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.15)', fill: true, tension: 0.3,
+            borderColor: '#00ffff', backgroundColor: 'rgba(0,255,255,0.12)', fill: true, tension: 0.3,
             pointRadius: pts.length > 60 ? 0 : 3, borderWidth: 2,
           }],
         },
@@ -900,6 +906,7 @@ function setupCarousel(el, inv, photos, urls, title) {
   let cur = Math.min(el.galleryStart ?? 0, n - 1);
   el.galleryStart = 0;
   let playing = false;
+  let zoomed = false; // „Powiększ” – aktywne zdjęcie w skali 120%
 
   // Najkrótsza odległość po okręgu, żeby karuzela się zapętlała.
   const offset = (i) => {
@@ -917,7 +924,10 @@ function setupCarousel(el, inv, photos, urls, title) {
       const a = Math.abs(d);
       const w = c.offsetWidth;
       c.classList.toggle('active', d === 0);
-      c.style.transform = `translate(-50%, -50%) translateX(${d * w * step}px) translateZ(${-a * 160}px) rotateY(${-Math.sign(d) * Math.min(a, 2) * 24}deg) scale(${1 - Math.min(a, 2) * 0.06})`;
+      c.style.transform = `translate(-50%, -50%) translateX(${d * w * step}px) translateZ(${-a * 160}px) rotateY(${-Math.sign(d) * Math.min(a, 2) * 24}deg) scale(${d === 0 && zoomed ? 1.2 : 1 - Math.min(a, 2) * 0.06})`;
+      c.classList.toggle('zoomed', d === 0 && zoomed);
+      const ex = c.querySelector('[data-expand]');
+      ex.innerHTML = `${icon(d === 0 && zoomed ? 'shrink' : 'expand', 13)} ${d === 0 && zoomed ? 'Pomniejsz' : 'Powiększ'}`;
       c.style.opacity = a > 2 ? '0' : String(1 - a * 0.18);
       c.style.zIndex = String(10 - a);
       c.style.pointerEvents = a > 2 ? 'none' : '';
@@ -930,7 +940,7 @@ function setupCarousel(el, inv, photos, urls, title) {
     root.querySelectorAll('[data-dot]').forEach((b, i) => b.classList.toggle('on', i === cur));
     closeMenu();
   };
-  const go = (i) => { cur = ((i % n) + n) % n; render(); };
+  const go = (i) => { cur = ((i % n) + n) % n; zoomed = false; render(); };
 
   const setPlaying = (on) => {
     playing = on && n > 1;
@@ -958,7 +968,7 @@ function setupCarousel(el, inv, photos, urls, title) {
     menu = document.createElement('div');
     menu.className = 'car-menu';
     menu.innerHTML = `<button type="button" data-caption>${icon('edit', 15)} Zmień podpis</button>
-      <button type="button" data-download>${icon('upload', 15).replace('<svg', '<svg style="transform:rotate(180deg)"')} Pobierz</button>
+      <button type="button" data-download>${icon('download', 15)} Pobierz</button>
       <button type="button" class="danger" data-delete>${icon('trash', 15)} Usuń zdjęcie</button>`;
     card.append(menu);
     menu.onclick = (e) => e.stopPropagation();
@@ -987,6 +997,7 @@ function setupCarousel(el, inv, photos, urls, title) {
     c.onclick = (e) => {
       if (moved) return;
       if (e.target.closest('[data-more]')) { e.stopPropagation(); menu ? closeMenu() : openMenu(c); return; }
+      if (e.target.closest('[data-expand]')) { setPlaying(false); zoomed = !zoomed; render(); return; }
       if (offset(i) !== 0) { setPlaying(false); go(i); return; }
       openLightbox(i);
     };
@@ -998,7 +1009,7 @@ function setupCarousel(el, inv, photos, urls, title) {
   root.onkeydown = (e) => {
     if (e.key === 'ArrowLeft') { setPlaying(false); go(cur - 1); }
     else if (e.key === 'ArrowRight') { setPlaying(false); go(cur + 1); }
-    else if (e.key === 'Escape') closeMenu();
+    else if (e.key === 'Escape') { closeMenu(); if (zoomed) { zoomed = false; render(); } }
   };
   if (el.galleryCloser) document.removeEventListener('click', el.galleryCloser);
   el.galleryCloser = closeMenu;
@@ -1024,6 +1035,159 @@ function setupCarousel(el, inv, photos, urls, title) {
   ro.observe(root);
   addCleanup(() => ro.disconnect());
   render();
+}
+
+// ── Zakładka: serwis ──
+
+async function tabService(el, inv) {
+  const entries = await q(sb.from('service_entries').select('*').eq('investment_id', inv.id)
+    .order('entry_date', { ascending: false }).order('created_at', { ascending: false }));
+  const today = new Date().toLocaleDateString('sv-SE');
+  const fmtDay = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  el.innerHTML = `
+    <div class="panel glass" style="margin-bottom:16px">
+      <h2>Nowy wpis serwisowy</h2>
+      <p class="hint">Opisz naprawę, przegląd albo wymianę części. Wpisy tworzą historię serwisu tej inwestycji.</p>
+      <form id="svc-new" class="svc-form">
+        <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${today}" max="${today}" required></label>
+        <label class="lbl svc-body">Opis prac
+          <textarea class="inp" name="body" maxlength="5000" required placeholder="np. Wymiana akumulatora 12 V w AllinOne przy szkole, sprawdzono ładowanie z panelu."></textarea></label>
+        <div class="svc-actions"><span class="counter" data-count>0 / 5000</span><button class="btn primary" type="submit">${icon('plus', 16)} Zapisz wpis</button></div>
+      </form>
+    </div>
+    <div class="panel glass">
+      <h2>Historia serwisu</h2>
+      <p class="hint">${entries.length ? `${entries.length} ${entries.length === 1 ? 'wpis' : entries.length < 5 ? 'wpisy' : 'wpisów'}, od najnowszego.` : 'Brak wpisów.'}</p>
+      ${entries.length ? `<ol class="timeline">${entries.map((e) => `
+        <li data-entry="${e.id}">
+          <div class="tl-dot"></div>
+          <div class="tl-card">
+            <div class="tl-head"><b>${esc(fmtDay(e.entry_date))}</b>
+              <span class="sub">${esc(e.author || '')}${e.updated_at ? ' · edytowano' : ''}</span>
+              <span class="tl-tools">
+                <button class="btn icon ghost sm" type="button" data-edit title="Edytuj">${icon('edit', 15)}</button>
+                <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
+              </span>
+            </div>
+            <div class="tl-body">${esc(e.body)}</div>
+          </div>
+        </li>`).join('')}</ol>` : '<div class="empty">Historia napraw pojawi się tutaj po dodaniu pierwszego wpisu.</div>'}
+    </div>`;
+
+  const form = el.querySelector('#svc-new');
+  const count = form.querySelector('[data-count]');
+  form.body.oninput = () => { count.textContent = `${form.body.value.length} / 5000`; };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!form.body.value.trim()) { toast('Wpisz opis prac.', 'err'); return; }
+    try {
+      await q(sb.from('service_entries').insert({ investment_id: inv.id, entry_date: form.entry_date.value, body: form.body.value.trim() }));
+      toast('Wpis zapisany.', 'ok');
+      tabService(el, inv);
+    } catch (err) { fail(err); }
+  };
+  el.querySelectorAll('[data-entry]').forEach((li) => {
+    const entry = entries.find((x) => x.id === li.dataset.entry);
+    li.querySelector('[data-edit]').onclick = async () => {
+      const res = await dialog({
+        title: 'Edytuj wpis serwisowy',
+        body: `<div class="list">
+          <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${esc(entry.entry_date)}" max="${today}" required></label>
+          <label class="lbl">Opis prac<textarea class="inp" name="body" maxlength="5000" required style="min-height:160px">${esc(entry.body)}</textarea></label></div>`,
+      });
+      if (!res) return;
+      try { await q(sb.from('service_entries').update({ entry_date: res.entry_date, body: res.body.trim() }).eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
+    };
+    li.querySelector('[data-del]').onclick = async () => {
+      if (!await confirmDialog('Usunąć wpis?', `Wpis z dnia ${fmtDay(entry.entry_date)} zostanie usunięty.`)) return;
+      try { await q(sb.from('service_entries').delete().eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
+    };
+  });
+}
+
+// ── Zakładka: dokumentacja ──
+
+function fmtSize(b) {
+  if (b == null) return '';
+  if (b < 1024 * 1024) return `${Math.max(1, Math.round(b / 1024))} kB`;
+  return `${(b / 1024 / 1024).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} MB`;
+}
+
+async function tabDocuments(el, inv) {
+  const docs = await q(sb.from('investment_documents').select('*').eq('investment_id', inv.id).order('created_at', { ascending: false }));
+  const fileInput = '<input type="file" accept="application/pdf,.pdf" multiple hidden>';
+  el.innerHTML = `
+    <div class="panel glass">
+      <div class="gal-head">
+        <div class="grow"><h2>Dokumentacja</h2>
+          <p class="hint" style="margin:0">Pliki PDF: schematy, instrukcje, protokoły odbioru. Maksymalnie ${fmtSize(MAX_DOC_BYTES)} na plik.</p></div>
+        ${docs.length ? `<label class="btn primary sm">${icon('upload', 15)} <span>Dodaj PDF</span>${fileInput}</label>` : ''}
+      </div>
+      ${docs.length ? `<div class="docs">${docs.map((d) => `
+        <div class="doc" data-doc="${d.id}">
+          <div class="doc-icon">${icon('file', 22)}<span>PDF</span></div>
+          <div class="grow" style="min-width:0">
+            <div class="title">${esc(d.file_name)}</div>
+            <div class="sub">${esc(fmtSize(d.size_bytes))} · dodano ${esc(fmtDate(d.created_at))}</div>
+          </div>
+          <button class="btn sm" type="button" data-open>${icon('eye', 15)} Otwórz</button>
+          <button class="btn icon ghost sm" type="button" data-download title="Pobierz">${icon('download', 15)}</button>
+          <button class="btn icon ghost sm" type="button" data-rename title="Zmień nazwę">${icon('edit', 15)}</button>
+          <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
+        </div>`).join('')}</div>` : `
+      <label class="upload" style="margin-top:12px">${icon('file', 30)}<b>Dodaj pierwsze dokumenty PDF</b>
+        <span style="font-size:12px">Możesz wybrać kilka plików naraz</span>${fileInput}</label>`}
+    </div>`;
+
+  const signed = async (d, download) => {
+    const { data, error } = await sb.storage.from(DOC_BUCKET).createSignedUrl(d.storage_path, 600, download ? { download: d.file_name } : undefined);
+    if (error) throw error;
+    return data.signedUrl;
+  };
+  el.querySelectorAll('[data-doc]').forEach((row) => {
+    const d = docs.find((x) => x.id === row.dataset.doc);
+    row.querySelector('[data-open]').onclick = async () => {
+      const w = window.open('', '_blank');
+      try { const u = await signed(d, false); if (w) w.location = u; else location.href = u; } catch (e) { w?.close(); fail(e); }
+    };
+    row.querySelector('[data-download]').onclick = async () => {
+      try { const a = document.createElement('a'); a.href = await signed(d, true); a.click(); } catch (e) { fail(e); }
+    };
+    row.querySelector('[data-rename]').onclick = async () => {
+      const res = await dialog({ title: 'Nazwa dokumentu', body: `<label class="lbl">Nazwa<input class="inp" name="file_name" maxlength="200" required value="${esc(d.file_name)}"></label>` });
+      if (!res) return;
+      try { await q(sb.from('investment_documents').update({ file_name: res.file_name.trim() }).eq('id', d.id)); tabDocuments(el, inv); } catch (e) { fail(e); }
+    };
+    row.querySelector('[data-del]').onclick = async () => {
+      if (!await confirmDialog('Usunąć dokument?', `„${d.file_name}” zostanie trwale usunięty.`)) return;
+      try {
+        await q(sb.from('investment_documents').delete().eq('id', d.id));
+        await sb.storage.from(DOC_BUCKET).remove([d.storage_path]);
+        tabDocuments(el, inv);
+      } catch (e) { fail(e); }
+    };
+  });
+
+  const input = el.querySelector('input[type=file]');
+  if (input) input.onchange = async () => {
+    const files = [...input.files];
+    const label = input.closest('label').querySelector('b, span');
+    for (const [i, file] of files.entries()) {
+      if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast(`„${file.name}” to nie jest PDF, pomijam.`, 'err'); continue; }
+      if (file.size > MAX_DOC_BYTES) { toast(`„${file.name}” jest za duży (maks. ${fmtSize(MAX_DOC_BYTES)}).`, 'err'); continue; }
+      label.textContent = `Wysyłanie ${i + 1} z ${files.length}…`;
+      try {
+        const path = `${inv.id}/${crypto.randomUUID()}.pdf`;
+        const { error } = await sb.storage.from(DOC_BUCKET).upload(path, file, { contentType: 'application/pdf' });
+        if (error) throw error;
+        const name = file.name.slice(0, 200);
+        const { error: e2 } = await sb.from('investment_documents').insert({ investment_id: inv.id, storage_path: path, file_name: name, size_bytes: file.size });
+        if (e2) { await sb.storage.from(DOC_BUCKET).remove([path]); throw e2; }
+      } catch (e) { fail(e); break; }
+    }
+    tabDocuments(el, inv);
+  };
 }
 
 // Zmniejsza zdjęcia z telefonu do max 1920 px (JPEG), żeby zmieściły się w limicie 5 MB.
