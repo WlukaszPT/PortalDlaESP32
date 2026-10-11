@@ -141,8 +141,10 @@ body:has(.shell) .bg::after { background: rgba(8, 9, 11, 0.62); }
 .sb-user .who { min-width: 0; }
 .sb-user .who b { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sb-user .who span { font-size: 12px; color: var(--dim); }
-.sb-search { margin: 14px 4px 4px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; color: var(--dim); }
-.sb-search input { background: transparent; border: 0; outline: 0; min-width: 0; flex: 1; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.inv-search { display: flex; align-items: center; gap: 10px; border-radius: 999px; padding: 12px 18px; color: var(--dim); cursor: text; }
+.inv-search:focus-within { color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.inv-search input { background: transparent; border: 0; outline: 0; min-width: 0; flex: 1; font-size: 15px; color: var(--text); }
+.inv-card[hidden] { display: none; }
 .sb-section { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--dim); padding: 16px 12px 6px; text-transform: uppercase; white-space: nowrap; }
 .sb-nav { display: flex; flex-direction: column; gap: 2px; }
 .sb-link {
@@ -250,13 +252,8 @@ body.role-user [data-admin] { display: none !important; }
 .switch input:focus-visible + span { outline: 2px solid #fff; outline-offset: 2px; }
 .dev-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--dim); font-size: 12px; }
 .dev-foot .spacer { flex: 1; }
-details.cmd { border-top: 1px solid var(--line); padding-top: 12px; }
-details.cmd summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; list-style: none; }
-details.cmd summary::-webkit-details-marker { display: none; }
-details.cmd[open] summary { color: var(--text); margin-bottom: 12px; }
-.cmd-hist { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; font-size: 13px; }
-.cmd-hist .row { padding: 8px 12px; }
-.cmd-hist code { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.run-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 14px; }
+.run-last { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; flex: none; }
 .pill.new { background: rgba(234,179,8,0.15); color: #fde68a; }
 .pill.received { background: rgba(59,130,246,0.15); color: #bfdbfe; }

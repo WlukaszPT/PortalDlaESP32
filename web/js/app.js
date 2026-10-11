@@ -1,5 +1,5 @@
 import {
-  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, MAX_COMMAND_BYTES, ONLINE_MINUTES,
+  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, ONLINE_MINUTES,
 } from './config.js';
 import { icon } from './icons.js';
 
@@ -293,9 +293,6 @@ function ensureShell() {
           <div class="avatar">${esc((state.profile.full_name || email).slice(0, 1).toUpperCase())}</div>
           <div class="who hide-collapsed"><b title="${esc(email)}">${esc(state.profile.full_name || email)}</b><span>${ROLE_LABEL[state.profile.role] || 'Zalogowano'}</span></div>
         </div>
-        <form class="sb-search hide-collapsed" id="sb-search" role="search">
-          ${icon('search', 15)}<input name="q" placeholder="Szukaj inwestycji…" aria-label="Szukaj inwestycji">
-        </form>
         <div class="sb-section">Menu</div>
         <nav class="sb-nav">
           <a class="sb-link" data-nav="pulpit" href="#/" title="Pulpit"><span class="bubble">${icon('home', 16)}</span><span class="hide-collapsed">Pulpit</span></a>
@@ -324,11 +321,6 @@ function ensureShell() {
     setTimeout(() => window.dispatchEvent(new Event('resize')), 320);
   };
   app.querySelector('#logout').onclick = async () => { await sb.auth.signOut(); location.hash = '#/login'; };
-  app.querySelector('#sb-search').onsubmit = (e) => {
-    e.preventDefault();
-    const v = e.currentTarget.q.value.trim();
-    location.hash = `#/inwestycje${v ? `?q=${encodeURIComponent(v)}` : ''}`;
-  };
   refreshOfflineBadge();
 }
 
@@ -456,22 +448,23 @@ async function pageMap(root) {
 async function pageInvestments(root) {
   document.title = 'Inwestycje · CloudEA';
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
-  const filter = (params.get('q') || '').toLowerCase();
   const [investments, devices] = await Promise.all([
     q(sb.from('investments').select('id, name, notes, address, latitude, longitude, created_at').order('created_at', { ascending: false })),
     q(sb.from('devices').select('investment_id, product_type, last_seen')),
   ]);
-  const shown = investments.filter((i) => !filter || i.name.toLowerCase().includes(filter) || (i.notes || '').toLowerCase().includes(filter));
 
   root.innerHTML = `
-    ${topbar('Inwestycje', filter ? `Wyniki dla „${esc(filter)}” · <a href="#/inwestycje">wyczyść</a>` : `${investments.length} inwestycji`,
+    ${topbar('Inwestycje', `${investments.length} inwestycji`,
       `<button class="btn primary" type="button" data-admin data-new>${icon('plus', 16)} Nowa inwestycja</button>`)}
+    <label class="inv-search glass">${icon('search', 18)}
+      <input type="search" id="inv-q" placeholder="Szukaj inwestycji po nazwie, opisie lub adresie…" aria-label="Szukaj inwestycji" autocomplete="off"></label>
     <section class="inv-grid fade-in">
-      ${shown.map((i) => {
+      ${investments.map((i) => {
         const ds = devices.filter((d) => d.investment_id === i.id);
         const conn = ds.filter((d) => typeOf(d.product_type).connected);
         const on = conn.filter((d) => isOnline(d.last_seen)).length;
-        return `<a class="inv-card glass" href="#/inwestycja/${i.id}">
+        const hay = [i.name, i.notes, i.address].filter(Boolean).join(' ').toLowerCase();
+        return `<a class="inv-card glass" href="#/inwestycja/${i.id}" data-hay="${esc(hay)}">
           <div style="display:flex;align-items:center;gap:10px"><span class="dev-icon" style="width:38px;height:38px">${icon('road', 18)}</span><h3>${esc(i.name)}</h3></div>
           ${i.notes ? `<div class="sub" style="color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.notes)}</div>` : ''}
           <div class="meta">
@@ -482,7 +475,20 @@ async function pageInvestments(root) {
       }).join('')}
       <button class="inv-card glass new" type="button" data-admin data-new>${icon('plus', 26)}<span>Dodaj inwestycję</span></button>
     </section>
-    ${!shown.length && filter ? '<div class="empty">Nic nie znaleziono.</div>' : ''}`;
+    <div class="empty" id="inv-none" hidden>Nic nie znaleziono.</div>`;
+
+  // Wyszukiwanie na bieżąco, podczas pisania.
+  const input = root.querySelector('#inv-q');
+  const applyFilter = () => {
+    const v = input.value.trim().toLowerCase();
+    let n = 0;
+    root.querySelectorAll('.inv-card[data-hay]').forEach((c) => { const ok = !v || c.dataset.hay.includes(v); c.hidden = !ok; n += ok; });
+    root.querySelectorAll('.inv-card.new').forEach((c) => { c.hidden = !!v; });
+    root.querySelector('#inv-none').hidden = !(v && !n);
+  };
+  input.oninput = applyFilter;
+  input.value = params.get('q') || '';
+  applyFilter();
   bindTopbar(root);
   root.querySelectorAll('[data-new]').forEach((b) => { b.onclick = newInvestment; });
   if (params.get('nowa') && isAdmin()) newInvestment();
@@ -630,7 +636,7 @@ async function tabDevices(el, inv) {
 
   // Odświeżanie statusów co 30 s, póki zakładka jest otwarta.
   const timer = setInterval(async () => {
-    if (!document.body.contains(el) || el.querySelector('details.cmd[open] textarea:focus')) return;
+    if (!document.body.contains(el)) return;
     try {
       const fresh = await q(sb.from('devices').select('id, last_seen').eq('investment_id', inv.id));
       fresh.forEach((d) => {
@@ -649,6 +655,10 @@ function setStatus(node, lastSeen) {
   node.title = `Ostatni kontakt: ${fmtDate(lastSeen)}`;
 }
 
+// Polecenie „Uruchom przejście”: ESP32 odbiera je przez device_fetch_commands jako {"turn on": true}.
+const RUN_KEY = 'turn on';
+const CMD_STATUS = { new: 'oczekuje', received: 'odebrane', done: 'wykonane', failed: 'błąd' };
+
 function deviceCard(d, dms, readings, commands) {
   const t = typeOf(d.product_type);
   const title = esc(d.name || t.name);
@@ -666,9 +676,8 @@ function deviceCard(d, dms, readings, commands) {
   const last = readings.find((r) => r.device_id === d.id);
   const lastVal = {};
   ms.forEach((m) => { const r = readings.find((x) => x.device_id === d.id && x.data && m.key in x.data); if (r) lastVal[m.key] = r.data[m.key]; });
-  const cmds = commands.filter((c) => c.device_id === d.id).slice(0, 6);
+  const lastRun = commands.find((c) => c.device_id === d.id && c.payload?.[RUN_KEY] === true);
   const on = isOnline(d.last_seen);
-  const enumMs = ms.filter((m) => m.value_type === 'enum');
 
   return `<article class="dev glass" data-dev="${d.id}">
     <div class="dev-head">
@@ -686,25 +695,10 @@ function deviceCard(d, dms, readings, commands) {
         <div class="m-value">${esc(fmtValue(m, lastVal[m.key]))}${m.unit && lastVal[m.key] !== undefined ? `<small>${esc(m.unit)}</small>` : ''}</div>
       </div>`).join('')}
     </div>` : '<div class="hint" style="color:var(--muted);font-size:13px">Ten typ nie ma jeszcze zdefiniowanych danych.</div>'}
-    <details class="cmd" data-admin>
-      <summary>${icon('send', 16)} Wyślij dane do urządzenia</summary>
-      <form data-cmd>
-        ${enumMs.length ? `<div class="form-grid" style="margin-bottom:10px">${enumMs.map((m) => `
-          <label class="lbl">${esc(m.label)} (szablon)
-            <select class="inp" data-template="${esc(m.key)}"><option value="">— wybierz —</option>${(m.allowed_values || []).map((v) => `<option>${esc(v)}</option>`).join('')}</select></label>`).join('')}</div>` : ''}
-        <label class="lbl">Dane w formacie JSON
-          <textarea class="inp" name="payload" spellcheck="false" placeholder='{"led": true}'></textarea></label>
-        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
-          <span class="counter" data-counter>0 / ${MAX_COMMAND_BYTES} B</span><span class="spacer" style="flex:1"></span>
-          <button class="btn primary sm" type="submit">${icon('send', 15)} Wyślij</button>
-        </div>
-      </form>
-      <div class="cmd-hist">
-        ${cmds.length ? cmds.map((c) => `<div class="row"><span class="pill ${c.status}">${{ new: 'oczekuje', received: 'odebrane', done: 'wykonane', failed: 'błąd' }[c.status]}</span>
-          <div class="grow"><code>${esc(JSON.stringify(c.payload))}</code>${c.result ? `<div class="sub">${esc(c.result)}</div>` : ''}</div>
-          <span class="sub">${esc(fmtDate(c.created_at))}</span></div>`).join('') : '<div class="sub" style="color:var(--dim)">Jeszcze nic nie wysłano.</div>'}
-      </div>
-    </details>
+    <div class="run-row">
+      <button class="btn primary" type="button" data-admin data-run>${icon('play', 16)} Uruchom przejście</button>
+      <span class="run-last" data-run-last>${lastRun ? `Ostatnio: ${esc(fmtDate(lastRun.created_at))} · <span class="pill ${lastRun.status}">${CMD_STATUS[lastRun.status]}</span>` : 'Jeszcze nie uruchamiano ze strony.'}</span>
+    </div>
     <div class="dev-foot"><span>Ostatni odczyt: ${last ? esc(fmtDate(last.created_at)) : 'brak'}</span><span class="spacer"></span><span>Dodano: ${esc(fmtDate(d.created_at))}</span></div>
   </article>`;
 }
@@ -733,29 +727,15 @@ function bindDeviceCards(el, inv, devices) {
         } catch (e) { cb.checked = !cb.checked; fail(e); }
       };
     });
-    const form = card.querySelector('[data-cmd]');
-    if (!form) return;
-    const ta = form.payload;
-    const counter = form.querySelector('[data-counter]');
-    const update = () => {
-      const n = new TextEncoder().encode(ta.value).length;
-      counter.textContent = `${n} / ${MAX_COMMAND_BYTES} B`;
-      counter.classList.toggle('bad', n > MAX_COMMAND_BYTES);
-    };
-    ta.oninput = update;
-    form.querySelectorAll('[data-template]').forEach((s) => {
-      s.onchange = () => { if (s.value) { ta.value = JSON.stringify({ [s.dataset.template]: s.value }, null, 2); update(); } };
-    });
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      let payload;
-      try { payload = JSON.parse(ta.value); } catch { toast('To nie jest poprawny JSON, np. {"led": true}.', 'err'); return; }
-      if (new TextEncoder().encode(JSON.stringify(payload)).length > MAX_COMMAND_BYTES) { toast('Dane są za duże (maks. 8 kB).', 'err'); return; }
+    const run = card.querySelector('[data-run]');
+    if (!run) return;
+    run.onclick = async () => {
+      run.disabled = true;
       try {
-        await q(sb.from('commands').insert({ device_id: d.id, payload }));
-        toast('Wysłano. Urządzenie odbierze dane przy najbliższym połączeniu.', 'ok');
+        await q(sb.from('commands').insert({ device_id: d.id, payload: { [RUN_KEY]: true } }));
+        toast('Wysłano. Sterownik uruchomi przejście przy najbliższym połączeniu.', 'ok');
         tabDevices(el, inv);
-      } catch (err) { fail(err); }
+      } catch (err) { run.disabled = false; fail(err); }
     };
   });
 }
