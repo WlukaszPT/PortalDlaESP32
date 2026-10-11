@@ -25,7 +25,8 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
   - *Dokumentacja*: pliki PDF (prywatne, do 20 MB każdy).
 - **Mapa** – wszystkie inwestycje na mapie Polski.
 - **Hurtownia danych** – ile miejsca zajmuje baza (limit 500 MB) i pliki (limit 1 GB) w darmowym planie, % wolnego miejsca, co zajmuje najwięcej i na jak długo wystarczy miejsca przy obecnym tempie odczytów. Dane z funkcji `storage_stats()`.
-- **Użytkownicy** (tylko administrator) – lista kont z podziałem na administratorów i użytkowników, zmiana roli, dodawanie, reset hasła, usuwanie.
+- **Rejestracja** – link „Zarejestruj się” w panelu logowania; nowe konto widzi tylko ekran „Konto czeka na zatwierdzenie”.
+- **Użytkownicy** (tylko administrator) – lista kont z podziałem na oczekujące (przycisk Zatwierdź), administratorów i użytkowników, zmiana roli, dodawanie, reset hasła, usuwanie.
 
 ## Role
 
