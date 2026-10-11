@@ -4,6 +4,7 @@
 //  - co 20 s zwiększa "counter" (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3), losuje "napiecie"
 //    (11,8–13,2 V) i wysyła oba do bazy; counter idzie do bazy w całościach (23,3 -> 23),
 //  - o północy (czas polski z internetu) counter wraca do zera,
+//  - counter jest zapisywany w pamięci flash, więc po restarcie liczy dalej od tej samej wartości,
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
 //    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s.
 //
@@ -16,6 +17,7 @@
 #include <ArduinoJson.h>
 #include <Ticker.h>
 #include <time.h>
+#include <Preferences.h>
 
 #include "secrets.h"
 #include "root_ca.h"
@@ -38,7 +40,9 @@ const char* CMD_TURN_ON    = "turn on";          // polecenie z przycisku na str
 
 // Counter liczony w dziesiątych częściach (10 = 1,0; 3 = 0,3), żeby uniknąć błędów zaokrągleń.
 long  counterTenths = 0;
-int   counterDay = -1;  // dzień roku, w którym liczymy (do zerowania o północy)
+int   counterDay = -1;  // dzień (rok * 1000 + dzień roku), w którym liczymy; -1 = jeszcze nieznany
+
+Preferences store;  // pamięć flash (NVS), przetrwa restart i odłączenie zasilania
 float napiecie = 0;
 bool  tornOn = false;
 
@@ -107,22 +111,41 @@ bool localTimeNow(struct tm& now) {
 
 // ───────────── Odczyty ─────────────
 
+void loadCounter() {
+  store.begin("cloudea", false);
+  counterTenths = store.getLong("counter", 0);
+  counterDay = store.getInt("day", -1);
+  Serial.printf("Counter z pamięci: %.1f\n", counterTenths / 10.0);
+}
+
+// Zapis po każdej zmianie: pamięć NVS rozkłada zapisy po flashu, co 20 s to bezpieczne na lata.
+void saveCounter() {
+  store.putLong("counter", counterTenths);
+  store.putInt("day", counterDay);
+}
+
 void updateCounter() {
   struct tm now;
   if (!localTimeNow(now)) {
     Serial.println("Brak aktualnego czasu, licznik +1");
     counterTenths += 10;
+    saveCounter();
     return;
   }
 
-  if (counterDay != now.tm_yday) {
-    if (counterDay != -1) Serial.println("Północ: zeruję counter");
-    counterDay = now.tm_yday;
-    counterTenths = 0;
+  int today = (now.tm_year + 1900) * 1000 + now.tm_yday;
+  if (counterDay != today) {
+    // Nowy dzień (północ albo płytka była wyłączona przez noc): zerujemy.
+    if (counterDay != -1) {
+      Serial.println("Nowy dzień: zeruję counter");
+      counterTenths = 0;
+    }
+    counterDay = today;
   }
 
   bool day = now.tm_hour >= DAY_START_HOUR && now.tm_hour < DAY_END_HOUR;
   counterTenths += day ? 10 : 3;
+  saveCounter();
 }
 
 void sendReading() {
@@ -204,6 +227,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
   randomSeed(esp_random());
+  loadCounter();
 
   tls.setCACert(ROOT_CA);
   connectWiFi();
