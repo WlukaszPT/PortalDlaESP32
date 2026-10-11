@@ -1,5 +1,5 @@
 import {
-  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, MAX_COMMAND_BYTES, ONLINE_MINUTES,
+  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, ONLINE_MINUTES, DB_LIMIT_BYTES, FILES_LIMIT_BYTES,
 } from './config.js';
 import { icon } from './icons.js';
 
@@ -160,12 +160,12 @@ async function boot() {
 
 function renderLogin() {
   runCleanups();
-  document.title = 'Logowanie · Portal ESP32';
+  document.title = 'Logowanie · CloudEA';
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-card glass fade-in">
         <form class="login-form" id="login" novalidate>
-          <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> Portal ESP32</div>
+          <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> CloudEA</div>
           <h1>Logowanie</h1>
           <p class="sub">Zaloguj się, aby zarządzać inwestycjami i sterownikami.</p>
           <label class="field">${icon('mail')}
@@ -270,6 +270,7 @@ async function route() {
     if (page === 'inwestycje') await pageInvestments(content);
     else if (page === 'mapa') await pageMap(content);
     else if (page === 'uzytkownicy' && isAdmin()) await pageUsers(content);
+    else if (page === 'hurtownia') await pageWarehouse(content);
     else if (page === 'inwestycja' && id) await pageInvestment(content, id, tab);
     else await pageDashboard(content);
   } catch (e) {
@@ -286,21 +287,19 @@ function ensureShell() {
       <aside class="sidebar glass">
         <div class="dots hide-collapsed"><i></i><i></i><i></i></div>
         <div class="sb-head">
-          <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">Portal ESP32</span></div>
+          <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">CloudEA</span></div>
           <button class="sb-toggle" type="button" aria-label="Zwiń menu" title="Zwiń / rozwiń menu">${icon('chevronLeft', 16)}</button>
         </div>
         <div class="sb-user">
           <div class="avatar">${esc((state.profile.full_name || email).slice(0, 1).toUpperCase())}</div>
           <div class="who hide-collapsed"><b title="${esc(email)}">${esc(state.profile.full_name || email)}</b><span>${ROLE_LABEL[state.profile.role] || 'Zalogowano'}</span></div>
         </div>
-        <form class="sb-search hide-collapsed" id="sb-search" role="search">
-          ${icon('search', 15)}<input name="q" placeholder="Szukaj inwestycji…" aria-label="Szukaj inwestycji">
-        </form>
         <div class="sb-section">Menu</div>
         <nav class="sb-nav">
           <a class="sb-link" data-nav="pulpit" href="#/" title="Pulpit"><span class="bubble">${icon('home', 16)}</span><span class="hide-collapsed">Pulpit</span></a>
           <a class="sb-link" data-nav="inwestycje" href="#/inwestycje" title="Inwestycje"><span class="bubble">${icon('road', 16)}</span><span class="hide-collapsed">Inwestycje</span><span class="badge hide-collapsed" id="offline-badge" hidden title="Urządzenia offline"></span></a>
           <a class="sb-link" data-nav="mapa" href="#/mapa" title="Mapa"><span class="bubble">${icon('map', 16)}</span><span class="hide-collapsed">Mapa</span></a>
+          <a class="sb-link" data-nav="hurtownia" href="#/hurtownia" title="Hurtownia danych"><span class="bubble">${icon('database', 16)}</span><span class="hide-collapsed">Hurtownia danych</span></a>
           ${isAdmin() ? `<a class="sb-link" data-nav="uzytkownicy" href="#/uzytkownicy" title="Użytkownicy"><span class="bubble">${icon('users', 16)}</span><span class="hide-collapsed">Użytkownicy</span></a>` : ''}
         </nav>
         <div class="sb-sep"></div>
@@ -324,11 +323,6 @@ function ensureShell() {
     setTimeout(() => window.dispatchEvent(new Event('resize')), 320);
   };
   app.querySelector('#logout').onclick = async () => { await sb.auth.signOut(); location.hash = '#/login'; };
-  app.querySelector('#sb-search').onsubmit = (e) => {
-    e.preventDefault();
-    const v = e.currentTarget.q.value.trim();
-    location.hash = `#/inwestycje${v ? `?q=${encodeURIComponent(v)}` : ''}`;
-  };
   refreshOfflineBadge();
 }
 
@@ -366,7 +360,7 @@ function bindTopbar(root) {
 // ───────────────────────── Pulpit ─────────────────────────
 
 async function pageDashboard(root) {
-  document.title = 'Pulpit · Portal ESP32';
+  document.title = 'Pulpit · CloudEA';
   const since = new Date(Date.now() - 86400000).toISOString();
   const [investments, devices, readings24, latest] = await Promise.all([
     q(sb.from('investments').select('id, name, latitude, longitude').order('created_at', { ascending: false })),
@@ -437,8 +431,70 @@ function drawInvestmentPins(map, investments) {
 
 // ───────────────────────── Mapa ─────────────────────────
 
+// ───────────────────────── Hurtownia danych ─────────────────────────
+
+const TABLE_LABEL = {
+  readings: 'Odczyty z urządzeń', commands: 'Polecenia dla urządzeń', devices: 'Urządzenia', device_metrics: 'Wybór danych urządzeń',
+  investments: 'Inwestycje', investment_photos: 'Zdjęcia (opisy)', investment_documents: 'Dokumenty (opisy)',
+  service_entries: 'Wpisy serwisowe', profiles: 'Użytkownicy', product_types: 'Typy produktów', product_metrics: 'Rodzaje danych',
+};
+const BUCKET_LABEL = { 'investment-photos': 'Zdjęcia', 'investment-docs': 'Dokumentacja PDF' };
+
+function usageCard(title, ic, used, limit, note) {
+  const pct = Math.min(100, (used / limit) * 100);
+  const free = 100 - pct;
+  const level = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+  return `<div class="usage glass">
+    <div class="usage-head"><span class="dev-icon">${icon(ic, 20)}</span><h3>${title}</h3></div>
+    <div class="usage-free"><b>${free.toLocaleString('pl-PL', { maximumFractionDigits: 1 })}%</b> wolnego miejsca</div>
+    <div class="bar ${level}"><span style="width:${Math.max(pct, 0.6)}%"></span></div>
+    <div class="usage-nums"><span>Zajęte: <b>${fmtSize(used)}</b></span><span>Limit: ${fmtSize(limit)}</span></div>
+    ${note ? `<p class="hint">${note}</p>` : ''}
+  </div>`;
+}
+
+async function pageWarehouse(root) {
+  document.title = 'Hurtownia danych · CloudEA';
+  const st = await q(sb.rpc('storage_stats'));
+  const filesBytes = st.buckets.reduce((a, b) => a + Number(b.bytes), 0);
+  const tables = [...st.tables].sort((a, b) => b.bytes - a.bytes);
+  const rd = st.readings;
+  const rdTable = st.tables.find((t) => t.name === 'readings');
+  // Szacunek: ile jeszcze odczytów zmieści się w bazie i na ile czasu przy obecnym tempie.
+  // Przy małej liczbie odczytów rozmiar tabeli to głównie stały narzut, więc liczymy ok. 250 B na odczyt.
+  const perReading = rd.count > 5000 && rdTable ? rdTable.bytes / rd.count : 250;
+  const freeDb = Math.max(0, DB_LIMIT_BYTES - st.db_bytes);
+  const fits = Math.floor(freeDb / perReading);
+  const days = rd.last_24h ? fits / rd.last_24h : null;
+  const n = (x) => Number(x).toLocaleString('pl-PL');
+  const howLong = days == null ? '' : days > 730 ? `ponad ${n(Math.floor(days / 365))} lat` : days > 60 ? `ok. ${n(Math.round(days / 30))} miesięcy` : `ok. ${n(Math.round(days))} dni`;
+
+  root.innerHTML = `
+    ${topbar('Hurtownia danych', 'Zajętość miejsca w darmowym planie Supabase')}
+    <section class="usage-grid fade-in">
+      ${usageCard('Baza danych', 'database', st.db_bytes, DB_LIMIT_BYTES, 'Tabele, odczyty z urządzeń i dane systemowe Supabase.')}
+      ${usageCard('Pliki (zdjęcia i PDF)', 'image', filesBytes, FILES_LIMIT_BYTES, st.buckets.map((b) => `${esc(BUCKET_LABEL[b.bucket] || b.bucket)}: ${n(b.files)} plików, ${fmtSize(Number(b.bytes))}`).join(' · ') || 'Brak plików.')}
+    </section>
+    <section class="stats fade-in">
+      <div class="stat glass"><div class="label">${icon('chart', 15)} Odczyty w bazie</div><div class="value">${n(rd.count)}</div></div>
+      <div class="stat glass"><div class="label">${icon('calendar', 15)} Odczyty z ostatnich 24 h</div><div class="value">${n(rd.last_24h)}</div></div>
+      <div class="stat glass"><div class="label">${icon('database', 15)} Zmieści się jeszcze</div><div class="value">~${n(fits)}</div><div class="hint">odczytów (ok. ${Math.round(perReading)} B każdy)</div></div>
+      <div class="stat glass"><div class="label">${icon('refresh', 15)} Przy obecnym tempie</div><div class="value" style="font-size:22px">${howLong || '—'}</div><div class="hint">${howLong ? 'zanim baza się zapełni' : 'brak odczytów z ostatniej doby'}</div></div>
+    </section>
+    <div class="panel glass fade-in">
+      <h2>Co zajmuje miejsce w bazie</h2>
+      <div class="table-wrap"><table class="tbl">
+        <thead><tr><th>Dane</th><th>Wierszy</th><th>Rozmiar</th><th style="width:40%">Udział</th></tr></thead>
+        <tbody>${tables.map((t) => `<tr><td>${esc(TABLE_LABEL[t.name] || t.name)}</td><td>${t.rows == null ? '—' : n(t.rows)}</td><td>${fmtSize(t.bytes)}</td>
+          <td><div class="bar thin"><span style="width:${Math.max(1, (t.bytes / tables[0].bytes) * 100)}%"></span></div></td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:10px">Pozostałe ${fmtSize(Math.max(0, st.db_bytes - tables.reduce((a, t) => a + t.bytes, 0)))} to tabele systemowe Supabase (logowanie, pliki, indeksy wewnętrzne).${rd.first ? ` Najstarszy odczyt: ${esc(fmtDate(rd.first))}.` : ''}</p>
+    </div>`;
+  bindTopbar(root);
+}
+
 async function pageMap(root) {
-  document.title = 'Mapa · Portal ESP32';
+  document.title = 'Mapa · CloudEA';
   const investments = await q(sb.from('investments').select('id, name, latitude, longitude'));
   const without = investments.filter((i) => i.latitude == null);
   root.innerHTML = `
@@ -454,24 +510,25 @@ async function pageMap(root) {
 // ───────────────────────── Lista inwestycji ─────────────────────────
 
 async function pageInvestments(root) {
-  document.title = 'Inwestycje · Portal ESP32';
+  document.title = 'Inwestycje · CloudEA';
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
-  const filter = (params.get('q') || '').toLowerCase();
   const [investments, devices] = await Promise.all([
     q(sb.from('investments').select('id, name, notes, address, latitude, longitude, created_at').order('created_at', { ascending: false })),
     q(sb.from('devices').select('investment_id, product_type, last_seen')),
   ]);
-  const shown = investments.filter((i) => !filter || i.name.toLowerCase().includes(filter) || (i.notes || '').toLowerCase().includes(filter));
 
   root.innerHTML = `
-    ${topbar('Inwestycje', filter ? `Wyniki dla „${esc(filter)}” · <a href="#/inwestycje">wyczyść</a>` : `${investments.length} inwestycji`,
+    ${topbar('Inwestycje', `${investments.length} inwestycji`,
       `<button class="btn primary" type="button" data-admin data-new>${icon('plus', 16)} Nowa inwestycja</button>`)}
+    <label class="inv-search glass">${icon('search', 18)}
+      <input type="search" id="inv-q" placeholder="Szukaj inwestycji po nazwie, opisie lub adresie…" aria-label="Szukaj inwestycji" autocomplete="off"></label>
     <section class="inv-grid fade-in">
-      ${shown.map((i) => {
+      ${investments.map((i) => {
         const ds = devices.filter((d) => d.investment_id === i.id);
         const conn = ds.filter((d) => typeOf(d.product_type).connected);
         const on = conn.filter((d) => isOnline(d.last_seen)).length;
-        return `<a class="inv-card glass" href="#/inwestycja/${i.id}">
+        const hay = [i.name, i.notes, i.address].filter(Boolean).join(' ').toLowerCase();
+        return `<a class="inv-card glass" href="#/inwestycja/${i.id}" data-hay="${esc(hay)}">
           <div style="display:flex;align-items:center;gap:10px"><span class="dev-icon" style="width:38px;height:38px">${icon('road', 18)}</span><h3>${esc(i.name)}</h3></div>
           ${i.notes ? `<div class="sub" style="color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.notes)}</div>` : ''}
           <div class="meta">
@@ -482,7 +539,20 @@ async function pageInvestments(root) {
       }).join('')}
       <button class="inv-card glass new" type="button" data-admin data-new>${icon('plus', 26)}<span>Dodaj inwestycję</span></button>
     </section>
-    ${!shown.length && filter ? '<div class="empty">Nic nie znaleziono.</div>' : ''}`;
+    <div class="empty" id="inv-none" hidden>Nic nie znaleziono.</div>`;
+
+  // Wyszukiwanie na bieżąco, podczas pisania.
+  const input = root.querySelector('#inv-q');
+  const applyFilter = () => {
+    const v = input.value.trim().toLowerCase();
+    let n = 0;
+    root.querySelectorAll('.inv-card[data-hay]').forEach((c) => { const ok = !v || c.dataset.hay.includes(v); c.hidden = !ok; n += ok; });
+    root.querySelectorAll('.inv-card.new').forEach((c) => { c.hidden = !!v; });
+    root.querySelector('#inv-none').hidden = !(v && !n);
+  };
+  input.oninput = applyFilter;
+  input.value = params.get('q') || '';
+  applyFilter();
   bindTopbar(root);
   root.querySelectorAll('[data-new]').forEach((b) => { b.onclick = newInvestment; });
   if (params.get('nowa') && isAdmin()) newInvestment();
@@ -510,7 +580,8 @@ async function newInvestment() {
 
 const TABS = [
   ['urzadzenia', 'Urządzenia', 'chip'],
-  ['odczyty', 'Odczyty', 'chart'],
+  ['odczyty', 'Wykresy', 'chart'],
+  ['dane', 'Dane rzeczywiste', 'table'],
   ['galeria', 'Galeria', 'image'],
   ['lokalizacja', 'Lokalizacja', 'pin'],
   ['serwis', 'Serwis', 'wrench'],
@@ -520,7 +591,7 @@ const TABS = [
 async function pageInvestment(root, id, tab) {
   const inv = await q(sb.from('investments').select('*').eq('id', id).maybeSingle());
   if (!inv) { root.innerHTML = `<div class="panel glass"><h2>Nie znaleziono inwestycji</h2><a class="btn" href="#/inwestycje">Wróć do listy</a></div>`; return; }
-  document.title = `${inv.name} · Portal ESP32`;
+  document.title = `${inv.name} · CloudEA`;
   if (!TABS.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
@@ -536,7 +607,8 @@ async function pageInvestment(root, id, tab) {
   root.querySelector('[data-del]').onclick = () => deleteInvestment(inv);
 
   const el = root.querySelector('#tab');
-  if (tab === 'odczyty') await tabReadings(el, inv);
+  if (tab === 'odczyty') await tabReadings(el, inv, 'charts');
+  else if (tab === 'dane') await tabReadings(el, inv, 'table');
   else if (tab === 'galeria') await tabGallery(el, inv);
   else if (tab === 'lokalizacja') await tabLocation(el, inv);
   else if (tab === 'serwis') await tabService(el, inv);
@@ -630,7 +702,7 @@ async function tabDevices(el, inv) {
 
   // Odświeżanie statusów co 30 s, póki zakładka jest otwarta.
   const timer = setInterval(async () => {
-    if (!document.body.contains(el) || el.querySelector('details.cmd[open] textarea:focus')) return;
+    if (!document.body.contains(el)) return;
     try {
       const fresh = await q(sb.from('devices').select('id, last_seen').eq('investment_id', inv.id));
       fresh.forEach((d) => {
@@ -649,6 +721,10 @@ function setStatus(node, lastSeen) {
   node.title = `Ostatni kontakt: ${fmtDate(lastSeen)}`;
 }
 
+// Polecenie „Uruchom przejście”: ESP32 odbiera je przez device_fetch_commands jako {"turn on": true}.
+const RUN_KEY = 'turn on';
+const CMD_STATUS = { new: 'oczekuje', received: 'odebrane', done: 'wykonane', failed: 'błąd' };
+
 function deviceCard(d, dms, readings, commands) {
   const t = typeOf(d.product_type);
   const title = esc(d.name || t.name);
@@ -666,9 +742,8 @@ function deviceCard(d, dms, readings, commands) {
   const last = readings.find((r) => r.device_id === d.id);
   const lastVal = {};
   ms.forEach((m) => { const r = readings.find((x) => x.device_id === d.id && x.data && m.key in x.data); if (r) lastVal[m.key] = r.data[m.key]; });
-  const cmds = commands.filter((c) => c.device_id === d.id).slice(0, 6);
+  const lastRun = commands.find((c) => c.device_id === d.id && c.payload?.[RUN_KEY] === true);
   const on = isOnline(d.last_seen);
-  const enumMs = ms.filter((m) => m.value_type === 'enum');
 
   return `<article class="dev glass" data-dev="${d.id}">
     <div class="dev-head">
@@ -686,25 +761,10 @@ function deviceCard(d, dms, readings, commands) {
         <div class="m-value">${esc(fmtValue(m, lastVal[m.key]))}${m.unit && lastVal[m.key] !== undefined ? `<small>${esc(m.unit)}</small>` : ''}</div>
       </div>`).join('')}
     </div>` : '<div class="hint" style="color:var(--muted);font-size:13px">Ten typ nie ma jeszcze zdefiniowanych danych.</div>'}
-    <details class="cmd" data-admin>
-      <summary>${icon('send', 16)} Wyślij dane do urządzenia</summary>
-      <form data-cmd>
-        ${enumMs.length ? `<div class="form-grid" style="margin-bottom:10px">${enumMs.map((m) => `
-          <label class="lbl">${esc(m.label)} (szablon)
-            <select class="inp" data-template="${esc(m.key)}"><option value="">— wybierz —</option>${(m.allowed_values || []).map((v) => `<option>${esc(v)}</option>`).join('')}</select></label>`).join('')}</div>` : ''}
-        <label class="lbl">Dane w formacie JSON
-          <textarea class="inp" name="payload" spellcheck="false" placeholder='{"led": true}'></textarea></label>
-        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
-          <span class="counter" data-counter>0 / ${MAX_COMMAND_BYTES} B</span><span class="spacer" style="flex:1"></span>
-          <button class="btn primary sm" type="submit">${icon('send', 15)} Wyślij</button>
-        </div>
-      </form>
-      <div class="cmd-hist">
-        ${cmds.length ? cmds.map((c) => `<div class="row"><span class="pill ${c.status}">${{ new: 'oczekuje', received: 'odebrane', done: 'wykonane', failed: 'błąd' }[c.status]}</span>
-          <div class="grow"><code>${esc(JSON.stringify(c.payload))}</code>${c.result ? `<div class="sub">${esc(c.result)}</div>` : ''}</div>
-          <span class="sub">${esc(fmtDate(c.created_at))}</span></div>`).join('') : '<div class="sub" style="color:var(--dim)">Jeszcze nic nie wysłano.</div>'}
-      </div>
-    </details>
+    <div class="run-row">
+      <button class="btn primary" type="button" data-admin data-run>${icon('play', 16)} Uruchom przejście</button>
+      <span class="run-last" data-run-last>${lastRun ? `Ostatnio: ${esc(fmtDate(lastRun.created_at))} · <span class="pill ${lastRun.status}">${CMD_STATUS[lastRun.status]}</span>` : 'Jeszcze nie uruchamiano ze strony.'}</span>
+    </div>
     <div class="dev-foot"><span>Ostatni odczyt: ${last ? esc(fmtDate(last.created_at)) : 'brak'}</span><span class="spacer"></span><span>Dodano: ${esc(fmtDate(d.created_at))}</span></div>
   </article>`;
 }
@@ -733,38 +793,29 @@ function bindDeviceCards(el, inv, devices) {
         } catch (e) { cb.checked = !cb.checked; fail(e); }
       };
     });
-    const form = card.querySelector('[data-cmd]');
-    if (!form) return;
-    const ta = form.payload;
-    const counter = form.querySelector('[data-counter]');
-    const update = () => {
-      const n = new TextEncoder().encode(ta.value).length;
-      counter.textContent = `${n} / ${MAX_COMMAND_BYTES} B`;
-      counter.classList.toggle('bad', n > MAX_COMMAND_BYTES);
-    };
-    ta.oninput = update;
-    form.querySelectorAll('[data-template]').forEach((s) => {
-      s.onchange = () => { if (s.value) { ta.value = JSON.stringify({ [s.dataset.template]: s.value }, null, 2); update(); } };
-    });
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      let payload;
-      try { payload = JSON.parse(ta.value); } catch { toast('To nie jest poprawny JSON, np. {"led": true}.', 'err'); return; }
-      if (new TextEncoder().encode(JSON.stringify(payload)).length > MAX_COMMAND_BYTES) { toast('Dane są za duże (maks. 8 kB).', 'err'); return; }
+    const run = card.querySelector('[data-run]');
+    if (!run) return;
+    run.onclick = async () => {
+      run.disabled = true;
       try {
-        await q(sb.from('commands').insert({ device_id: d.id, payload }));
-        toast('Wysłano. Urządzenie odbierze dane przy najbliższym połączeniu.', 'ok');
+        await q(sb.from('commands').insert({ device_id: d.id, payload: { [RUN_KEY]: true } }));
+        toast('Wysłano. Sterownik uruchomi przejście przy najbliższym połączeniu.', 'ok');
         tabDevices(el, inv);
-      } catch (err) { fail(err); }
+      } catch (err) { run.disabled = false; fail(err); }
     };
   });
 }
 
-// ── Zakładka: odczyty ──
+// ── Zakładki: wykresy i dane rzeczywiste (te same odczyty, inny widok) ──
 
-const RANGES = [['24h', 'Ostatnie 24 h', 1], ['7d', 'Ostatnie 7 dni', 7], ['30d', 'Ostatnie 30 dni', 30], ['all', 'Wszystkie (maks. 1000)', null]];
+// [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz]
+const RANGES = [
+  ['1h', 'Ostatnia godzina', 1, 0], ['prev1h', 'Poprzednia godzina', 2, 1],
+  ['24h', 'Ostatnie 24 h', 24, 0], ['7d', 'Ostatnie 7 dni', 168, 0], ['30d', 'Ostatnie 30 dni', 720, 0],
+  ['all', 'Wszystkie (maks. 1000)', null, 0],
+];
 
-async function tabReadings(el, inv) {
+async function tabReadings(el, inv, mode) {
   const devices = (await q(sb.from('devices').select('id, name, product_type').eq('investment_id', inv.id).order('created_at')))
     .filter((d) => typeOf(d.product_type).connected);
   if (!devices.length) { el.innerHTML = '<div class="empty glass">Brak urządzeń wysyłających dane. Dodaj sterownik w zakładce Urządzenia.</div>'; return; }
@@ -773,7 +824,7 @@ async function tabReadings(el, inv) {
     <div class="panel glass">
       <div class="toolbar">
         <label class="lbl">Urządzenie<select class="inp" id="r-dev">${devices.map((d) => `<option value="${d.id}">${esc(d.name || typeOf(d.product_type).name)} · ${esc(typeOf(d.product_type).name)}</option>`).join('')}</select></label>
-        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '24h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         <span style="flex:1"></span>
         <button class="btn sm" type="button" id="r-refresh">${icon('refresh', 15)} Odśwież</button>
         <button class="btn sm" type="button" id="r-csv">Pobierz CSV</button>
@@ -791,9 +842,10 @@ async function tabReadings(el, inv) {
     body.innerHTML = '<p class="hint">Ładowanie…</p>';
     charts.forEach((c) => c.destroy()); charts = [];
     const d = devices.find((x) => x.id === devSel.value);
-    const days = RANGES.find(([k]) => k === rangeSel.value)[2];
+    const [, , fromH, toH] = RANGES.find(([k]) => k === rangeSel.value);
     let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(1000);
-    if (days) query = query.gte('created_at', new Date(Date.now() - days * 86400000).toISOString());
+    if (fromH) query = query.gte('created_at', new Date(Date.now() - fromH * 3600000).toISOString());
+    if (toH) query = query.lt('created_at', new Date(Date.now() - toH * 3600000).toISOString());
     try { current = (await q(query)).reverse(); } catch (e) { fail(e); return; }
     const ms = metricsOf(d.product_type);
     const keys = [...new Set(current.flatMap((r) => Object.keys(r.data || {})))];
@@ -801,13 +853,17 @@ async function tabReadings(el, inv) {
     if (!current.length) { body.innerHTML = '<div class="empty">Brak odczytów w wybranym zakresie.</div>'; return; }
     const numeric = cols.filter((m) => m.value_type === 'number' || m.value_type === 'integer');
 
-    body.innerHTML = `
-      ${numeric.length ? `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>` : ''}
-      <div class="table-wrap"><table class="tbl">
-        <thead><tr><th>Czas</th>${cols.map((m) => `<th>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</th>`).join('')}</tr></thead>
-        <tbody>${[...current].reverse().slice(0, 200).map((r) => `<tr><td>${esc(fmtDate(r.created_at))}</td>${cols.map((m) => `<td>${esc(fmtValue(m, r.data?.[m.key]))}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>
-      ${current.length > 200 ? `<p class="hint" style="margin-top:10px">Tabela pokazuje 200 najnowszych z ${current.length} odczytów. Wszystkie są w pliku CSV.</p>` : ''}`;
+    if (mode === 'table') {
+      body.innerHTML = `
+        <div class="table-wrap"><table class="tbl">
+          <thead><tr><th>Czas</th>${cols.map((m) => `<th>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</th>`).join('')}</tr></thead>
+          <tbody>${[...current].reverse().map((r) => `<tr><td>${esc(fmtDate(r.created_at))}</td>${cols.map((m) => `<td>${esc(fmtValue(m, r.data?.[m.key]))}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div>
+        <p class="hint" style="margin-top:10px">${current.length} odczytów${current.length >= 1000 ? ' (pokazano 1000 najnowszych, zawęź zakres)' : ''}.</p>`;
+      return;
+    }
+    if (!numeric.length) { body.innerHTML = '<div class="empty">To urządzenie nie wysyła danych liczbowych. Zobacz zakładkę Dane rzeczywiste.</div>'; return; }
+    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>`;
 
     numeric.forEach((m) => {
       const pts = current.filter((r) => typeof r.data?.[m.key] === 'number');
@@ -1168,6 +1224,7 @@ async function tabService(el, inv) {
 function fmtSize(b) {
   if (b == null) return '';
   if (b < 1024 * 1024) return `${Math.max(1, Math.round(b / 1024))} kB`;
+  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} GB`;
   return `${(b / 1024 / 1024).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} MB`;
 }
 
@@ -1386,7 +1443,7 @@ async function usersApi(body) {
 }
 
 async function pageUsers(root) {
-  document.title = 'Użytkownicy · Portal ESP32';
+  document.title = 'Użytkownicy · CloudEA';
   const users = await q(sb.from('profiles').select('*').order('role').order('created_at'));
   const me = state.session.user.id;
   const admins = users.filter((u) => u.role === 'admin').length;
