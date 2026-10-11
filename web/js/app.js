@@ -1,5 +1,5 @@
 import {
-  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, ONLINE_MINUTES,
+  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, ONLINE_MINUTES, DB_LIMIT_BYTES, FILES_LIMIT_BYTES,
 } from './config.js';
 import { icon } from './icons.js';
 
@@ -270,6 +270,7 @@ async function route() {
     if (page === 'inwestycje') await pageInvestments(content);
     else if (page === 'mapa') await pageMap(content);
     else if (page === 'uzytkownicy' && isAdmin()) await pageUsers(content);
+    else if (page === 'hurtownia') await pageWarehouse(content);
     else if (page === 'inwestycja' && id) await pageInvestment(content, id, tab);
     else await pageDashboard(content);
   } catch (e) {
@@ -298,6 +299,7 @@ function ensureShell() {
           <a class="sb-link" data-nav="pulpit" href="#/" title="Pulpit"><span class="bubble">${icon('home', 16)}</span><span class="hide-collapsed">Pulpit</span></a>
           <a class="sb-link" data-nav="inwestycje" href="#/inwestycje" title="Inwestycje"><span class="bubble">${icon('road', 16)}</span><span class="hide-collapsed">Inwestycje</span><span class="badge hide-collapsed" id="offline-badge" hidden title="Urządzenia offline"></span></a>
           <a class="sb-link" data-nav="mapa" href="#/mapa" title="Mapa"><span class="bubble">${icon('map', 16)}</span><span class="hide-collapsed">Mapa</span></a>
+          <a class="sb-link" data-nav="hurtownia" href="#/hurtownia" title="Hurtownia danych"><span class="bubble">${icon('database', 16)}</span><span class="hide-collapsed">Hurtownia danych</span></a>
           ${isAdmin() ? `<a class="sb-link" data-nav="uzytkownicy" href="#/uzytkownicy" title="Użytkownicy"><span class="bubble">${icon('users', 16)}</span><span class="hide-collapsed">Użytkownicy</span></a>` : ''}
         </nav>
         <div class="sb-sep"></div>
@@ -429,6 +431,68 @@ function drawInvestmentPins(map, investments) {
 
 // ───────────────────────── Mapa ─────────────────────────
 
+// ───────────────────────── Hurtownia danych ─────────────────────────
+
+const TABLE_LABEL = {
+  readings: 'Odczyty z urządzeń', commands: 'Polecenia dla urządzeń', devices: 'Urządzenia', device_metrics: 'Wybór danych urządzeń',
+  investments: 'Inwestycje', investment_photos: 'Zdjęcia (opisy)', investment_documents: 'Dokumenty (opisy)',
+  service_entries: 'Wpisy serwisowe', profiles: 'Użytkownicy', product_types: 'Typy produktów', product_metrics: 'Rodzaje danych',
+};
+const BUCKET_LABEL = { 'investment-photos': 'Zdjęcia', 'investment-docs': 'Dokumentacja PDF' };
+
+function usageCard(title, ic, used, limit, note) {
+  const pct = Math.min(100, (used / limit) * 100);
+  const free = 100 - pct;
+  const level = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+  return `<div class="usage glass">
+    <div class="usage-head"><span class="dev-icon">${icon(ic, 20)}</span><h3>${title}</h3></div>
+    <div class="usage-free"><b>${free.toLocaleString('pl-PL', { maximumFractionDigits: 1 })}%</b> wolnego miejsca</div>
+    <div class="bar ${level}"><span style="width:${Math.max(pct, 0.6)}%"></span></div>
+    <div class="usage-nums"><span>Zajęte: <b>${fmtSize(used)}</b></span><span>Limit: ${fmtSize(limit)}</span></div>
+    ${note ? `<p class="hint">${note}</p>` : ''}
+  </div>`;
+}
+
+async function pageWarehouse(root) {
+  document.title = 'Hurtownia danych · CloudEA';
+  const st = await q(sb.rpc('storage_stats'));
+  const filesBytes = st.buckets.reduce((a, b) => a + Number(b.bytes), 0);
+  const tables = [...st.tables].sort((a, b) => b.bytes - a.bytes);
+  const rd = st.readings;
+  const rdTable = st.tables.find((t) => t.name === 'readings');
+  // Szacunek: ile jeszcze odczytów zmieści się w bazie i na ile czasu przy obecnym tempie.
+  // Przy małej liczbie odczytów rozmiar tabeli to głównie stały narzut, więc liczymy ok. 250 B na odczyt.
+  const perReading = rd.count > 5000 && rdTable ? rdTable.bytes / rd.count : 250;
+  const freeDb = Math.max(0, DB_LIMIT_BYTES - st.db_bytes);
+  const fits = Math.floor(freeDb / perReading);
+  const days = rd.last_24h ? fits / rd.last_24h : null;
+  const n = (x) => Number(x).toLocaleString('pl-PL');
+  const howLong = days == null ? '' : days > 730 ? `ponad ${n(Math.floor(days / 365))} lat` : days > 60 ? `ok. ${n(Math.round(days / 30))} miesięcy` : `ok. ${n(Math.round(days))} dni`;
+
+  root.innerHTML = `
+    ${topbar('Hurtownia danych', 'Zajętość miejsca w darmowym planie Supabase')}
+    <section class="usage-grid fade-in">
+      ${usageCard('Baza danych', 'database', st.db_bytes, DB_LIMIT_BYTES, 'Tabele, odczyty z urządzeń i dane systemowe Supabase.')}
+      ${usageCard('Pliki (zdjęcia i PDF)', 'image', filesBytes, FILES_LIMIT_BYTES, st.buckets.map((b) => `${esc(BUCKET_LABEL[b.bucket] || b.bucket)}: ${n(b.files)} plików, ${fmtSize(Number(b.bytes))}`).join(' · ') || 'Brak plików.')}
+    </section>
+    <section class="stats fade-in">
+      <div class="stat glass"><div class="label">${icon('chart', 15)} Odczyty w bazie</div><div class="value">${n(rd.count)}</div></div>
+      <div class="stat glass"><div class="label">${icon('calendar', 15)} Odczyty z ostatnich 24 h</div><div class="value">${n(rd.last_24h)}</div></div>
+      <div class="stat glass"><div class="label">${icon('database', 15)} Zmieści się jeszcze</div><div class="value">~${n(fits)}</div><div class="hint">odczytów (ok. ${Math.round(perReading)} B każdy)</div></div>
+      <div class="stat glass"><div class="label">${icon('refresh', 15)} Przy obecnym tempie</div><div class="value" style="font-size:22px">${howLong || '—'}</div><div class="hint">${howLong ? 'zanim baza się zapełni' : 'brak odczytów z ostatniej doby'}</div></div>
+    </section>
+    <div class="panel glass fade-in">
+      <h2>Co zajmuje miejsce w bazie</h2>
+      <div class="table-wrap"><table class="tbl">
+        <thead><tr><th>Dane</th><th>Wierszy</th><th>Rozmiar</th><th style="width:40%">Udział</th></tr></thead>
+        <tbody>${tables.map((t) => `<tr><td>${esc(TABLE_LABEL[t.name] || t.name)}</td><td>${t.rows == null ? '—' : n(t.rows)}</td><td>${fmtSize(t.bytes)}</td>
+          <td><div class="bar thin"><span style="width:${Math.max(1, (t.bytes / tables[0].bytes) * 100)}%"></span></div></td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:10px">Pozostałe ${fmtSize(Math.max(0, st.db_bytes - tables.reduce((a, t) => a + t.bytes, 0)))} to tabele systemowe Supabase (logowanie, pliki, indeksy wewnętrzne).${rd.first ? ` Najstarszy odczyt: ${esc(fmtDate(rd.first))}.` : ''}</p>
+    </div>`;
+  bindTopbar(root);
+}
+
 async function pageMap(root) {
   document.title = 'Mapa · CloudEA';
   const investments = await q(sb.from('investments').select('id, name, latitude, longitude'));
@@ -516,7 +580,8 @@ async function newInvestment() {
 
 const TABS = [
   ['urzadzenia', 'Urządzenia', 'chip'],
-  ['odczyty', 'Odczyty', 'chart'],
+  ['odczyty', 'Wykresy', 'chart'],
+  ['dane', 'Dane rzeczywiste', 'table'],
   ['galeria', 'Galeria', 'image'],
   ['lokalizacja', 'Lokalizacja', 'pin'],
   ['serwis', 'Serwis', 'wrench'],
@@ -542,7 +607,8 @@ async function pageInvestment(root, id, tab) {
   root.querySelector('[data-del]').onclick = () => deleteInvestment(inv);
 
   const el = root.querySelector('#tab');
-  if (tab === 'odczyty') await tabReadings(el, inv);
+  if (tab === 'odczyty') await tabReadings(el, inv, 'charts');
+  else if (tab === 'dane') await tabReadings(el, inv, 'table');
   else if (tab === 'galeria') await tabGallery(el, inv);
   else if (tab === 'lokalizacja') await tabLocation(el, inv);
   else if (tab === 'serwis') await tabService(el, inv);
@@ -740,7 +806,7 @@ function bindDeviceCards(el, inv, devices) {
   });
 }
 
-// ── Zakładka: odczyty ──
+// ── Zakładki: wykresy i dane rzeczywiste (te same odczyty, inny widok) ──
 
 // [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz]
 const RANGES = [
@@ -749,7 +815,7 @@ const RANGES = [
   ['all', 'Wszystkie (maks. 1000)', null, 0],
 ];
 
-async function tabReadings(el, inv) {
+async function tabReadings(el, inv, mode) {
   const devices = (await q(sb.from('devices').select('id, name, product_type').eq('investment_id', inv.id).order('created_at')))
     .filter((d) => typeOf(d.product_type).connected);
   if (!devices.length) { el.innerHTML = '<div class="empty glass">Brak urządzeń wysyłających dane. Dodaj sterownik w zakładce Urządzenia.</div>'; return; }
@@ -787,13 +853,17 @@ async function tabReadings(el, inv) {
     if (!current.length) { body.innerHTML = '<div class="empty">Brak odczytów w wybranym zakresie.</div>'; return; }
     const numeric = cols.filter((m) => m.value_type === 'number' || m.value_type === 'integer');
 
-    body.innerHTML = `
-      ${numeric.length ? `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>` : ''}
-      <div class="table-wrap"><table class="tbl">
-        <thead><tr><th>Czas</th>${cols.map((m) => `<th>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</th>`).join('')}</tr></thead>
-        <tbody>${[...current].reverse().slice(0, 200).map((r) => `<tr><td>${esc(fmtDate(r.created_at))}</td>${cols.map((m) => `<td>${esc(fmtValue(m, r.data?.[m.key]))}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>
-      ${current.length > 200 ? `<p class="hint" style="margin-top:10px">Tabela pokazuje 200 najnowszych z ${current.length} odczytów. Wszystkie są w pliku CSV.</p>` : ''}`;
+    if (mode === 'table') {
+      body.innerHTML = `
+        <div class="table-wrap"><table class="tbl">
+          <thead><tr><th>Czas</th>${cols.map((m) => `<th>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</th>`).join('')}</tr></thead>
+          <tbody>${[...current].reverse().map((r) => `<tr><td>${esc(fmtDate(r.created_at))}</td>${cols.map((m) => `<td>${esc(fmtValue(m, r.data?.[m.key]))}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div>
+        <p class="hint" style="margin-top:10px">${current.length} odczytów${current.length >= 1000 ? ' (pokazano 1000 najnowszych, zawęź zakres)' : ''}.</p>`;
+      return;
+    }
+    if (!numeric.length) { body.innerHTML = '<div class="empty">To urządzenie nie wysyła danych liczbowych. Zobacz zakładkę Dane rzeczywiste.</div>'; return; }
+    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>`;
 
     numeric.forEach((m) => {
       const pts = current.filter((r) => typeof r.data?.[m.key] === 'number');
@@ -1154,6 +1224,7 @@ async function tabService(el, inv) {
 function fmtSize(b) {
   if (b == null) return '';
   if (b < 1024 * 1024) return `${Math.max(1, Math.round(b / 1024))} kB`;
+  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} GB`;
   return `${(b / 1024 / 1024).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} MB`;
 }
 

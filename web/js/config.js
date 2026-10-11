@@ -11,3 +11,6 @@ export const MAX_DOC_BYTES = 20 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 8192;
 // Urządzenie uznajemy za online, jeśli odezwało się w ciągu tylu minut.
 export const ONLINE_MINUTES = 15;
+// Limity darmowego planu Supabase (Free): baza danych 500 MB, pliki 1 GB.
+export const DB_LIMIT_BYTES = 500 * 1024 * 1024;
+export const FILES_LIMIT_BYTES = 1024 * 1024 * 1024;

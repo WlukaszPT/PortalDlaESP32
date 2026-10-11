@@ -17,12 +17,14 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 - **Inwestycje** – lista z wyszukiwaniem, dodawanie, edycja, usuwanie.
 - **Inwestycja** – zakładki:
   - *Urządzenia*: dodawanie produktów, klucz `PL-…` do skopiowania, włączanie/wyłączanie danych, ostatnie wartości, przycisk „Uruchom przejście” (wysyła do ESP32 polecenie `{"turn on": true}`, które sterownik odbiera przez `device_fetch_commands`) ze statusem ostatniego uruchomienia,
-  - *Odczyty*: wykresy, tabela, eksport CSV,
+  - *Wykresy*: wykresy danych liczbowych, zakres od ostatniej godziny do 30 dni, eksport CSV,
+  - *Dane rzeczywiste*: tabela wszystkich odczytów w wybranym zakresie, eksport CSV,
   - *Galeria*: karuzela do 5 zdjęć (prywatne, zmniejszane przed wysłaniem),
   - *Lokalizacja*: współrzędne i mapa z pinezką,
   - *Serwis*: historia napraw (data, opis, kto wpisał),
   - *Dokumentacja*: pliki PDF (prywatne, do 20 MB każdy).
 - **Mapa** – wszystkie inwestycje na mapie Polski.
+- **Hurtownia danych** – ile miejsca zajmuje baza (limit 500 MB) i pliki (limit 1 GB) w darmowym planie, % wolnego miejsca, co zajmuje najwięcej i na jak długo wystarczy miejsca przy obecnym tempie odczytów. Dane z funkcji `storage_stats()`.
 - **Użytkownicy** (tylko administrator) – lista kont z podziałem na administratorów i użytkowników, zmiana roli, dodawanie, reset hasła, usuwanie.
 
 ## Role

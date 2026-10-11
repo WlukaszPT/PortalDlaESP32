@@ -6,4 +6,5 @@ Projekt Supabase jest połączony z tym repozytorium (Integrations → GitHub, W
 
 ## Funkcje (Edge Functions)
 
+- `storage_stats()` (migracja `20261011150000_hurtownia_danych.sql`) – rozmiar bazy, tabel i plików dla zakładki **Hurtownia danych**; tylko dla zalogowanych.
 - `functions/admin-users` – zakładanie, usuwanie kont i ustawianie nowego hasła z zakładki **Użytkownicy**. Używa klucza serwisowego dostępnego tylko po stronie Supabase; wywołać może wyłącznie zalogowany administrator (sprawdza tabelę `profiles`).
