@@ -20,7 +20,7 @@ Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywnośc
    - `investments`: inwestycje (np. „Stare Juchy”) ze współrzędnymi do mapy,
    - `investment_photos`: galeria inwestycji (do 5 zdjęć, pliki w Supabase Storage),
    - `product_types` i `product_metrics`: typy produktów (AllinOne, Dale, Lite4, aktywne/pasywne doświetlenie, BikeDale) i dane, które każdy z nich może wysyłać,
-   - `devices`: produkt w inwestycji; urządzenia łączące się ze stroną dostają automatycznie klucz `PL-123456789` wpisywany do kodu ESP32, a Lite4 i pasywne doświetlenie są tylko informacyjne (bez klucza),
+   - `devices`: produkt w inwestycji; urządzenia łączące się ze stroną dostają automatycznie klucz `PL-123456789` wpisywany do kodu ESP32, a Lite4, aktywne i pasywne doświetlenie są na razie tylko informacyjne (bez klucza),
    - `device_metrics`: które dane mają przychodzić z danego urządzenia na stronę,
    - `readings`: odczyty z ESP32 (JSON),
    - `commands`: dane dla ESP32 (do 8 kB) ze statusem: nowe / odebrane / wykonane / błąd.

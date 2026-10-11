@@ -3,7 +3,7 @@
 -- Model danych:
 --   inwestycja (np. "Stare Juchy") ze współrzędnymi i galerią zdjęć (do 5)
 --     └─ urządzenia (produkt danego typu, np. AllinOne); te łączące się ze stroną
---        mają klucz PL-123456789, pozostałe (Lite4, pasywne) są tylko informacyjne
+--        mają klucz PL-123456789, pozostałe (Lite4, aktywne, pasywne) są informacyjne
 --          ├─ wybrane dane, które urządzenie ma wysyłać (device_metrics)
 --          ├─ odczyty wysłane przez ESP32 (readings)
 --          └─ polecenia/dane dla ESP32 (commands)
@@ -27,7 +27,7 @@ insert into public.product_types (code, name, connected, sort_order) values
     ('allinone',         'AllinOne',                    true,  1),
     ('dale',             'Sterownik doświetlenia Dale', true,  2),
     ('lite4',            'Lite4',                       false, 3),
-    ('active_lighting',  'Aktywne doświetlenie',        true,  4),
+    ('active_lighting',  'Aktywne doświetlenie',        false, 4),
     ('passive_lighting', 'Pasywne doświetlenie',        false, 5),
     ('bikedale',         'Sterownik BikeDale',          true,  6);
 
@@ -59,7 +59,7 @@ insert into public.product_metrics (product_type, key, label, unit, value_type, 
     ('bikedale', 'eyes_count',      'Ilość oczek',                     null, 'integer', null, 2),
     ('bikedale', 'light_mode',      'Tryb świecenia',                  null, 'enum',
         array['wszystkie', 'kaskada', 'stroboskop'], 3);
--- Aktywne doświetlenie: dane dopiszemy, gdy będą znane. Lite4 i pasywne nie wysyłają danych.
+-- Lite4, aktywne i pasywne doświetlenie są na razie tylko informacyjne (bez danych).
 
 -- ───────────── Inwestycje ─────────────
 
