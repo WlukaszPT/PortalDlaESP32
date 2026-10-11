@@ -810,7 +810,8 @@ const RANGES = [
 const COUNTER_KEYS = ['activations', 'pedestrians'];
 
 // Odczyty jednej wielkości zebrane w godziny: [{ start: Date, value }].
-function hourlySeries(pts, key) {
+// Pokazujemy każdą godzinę zakresu, także bez odczytów (licznik 0, średnia pusta).
+function hourlySeries(pts, key, from, to) {
   const buckets = new Map();
   let prev = null;
   for (const r of pts) {
@@ -824,7 +825,17 @@ function hourlySeries(pts, key) {
     prev = v;
   }
   const counter = COUNTER_KEYS.includes(key);
-  return [...buckets.values()].map((b) => ({ start: b.start, value: counter ? b.inc : Math.round((b.sum / b.n) * 100) / 100 }));
+  const hour = (t) => { const d = new Date(t); d.setMinutes(0, 0, 0); return d; };
+  const first = hour(from ?? pts[0]?.created_at ?? Date.now());
+  const last = hour(to ?? pts.at(-1)?.created_at ?? Date.now());
+  // Przy bardzo długim zakresie (powyżej ok. miesiąca) pomijamy puste godziny, żeby wykres był czytelny.
+  if (last - first <= 744 * 3600000) {
+    for (let t = new Date(first); t <= last; t.setHours(t.getHours() + 1)) {
+      if (!buckets.has(+t)) buckets.set(+t, { start: new Date(t), sum: 0, n: 0, inc: 0 });
+    }
+  }
+  return [...buckets.values()].sort((a, b) => a.start - b.start)
+    .map((b) => ({ start: b.start, value: counter ? b.inc : b.n ? Math.round((b.sum / b.n) * 100) / 100 : null }));
 }
 
 async function tabReadings(el, inv, mode) {
@@ -885,7 +896,7 @@ async function tabReadings(el, inv, mode) {
       const raw = current.filter((r) => typeof r.data?.[m.key] === 'number');
       // Wspólna postać dla obu typów: czas słupka, wartość i opis w dymku.
       const pts = hourly
-        ? hourlySeries(raw, m.key).map((h) => {
+        ? hourlySeries(raw, m.key, fromH ? Date.now() - fromH * 3600000 : null, Date.now() - toH * 3600000 - (toH ? 1 : 0)).map((h) => {
           const end = new Date(+h.start + 3600000);
           const hm = (t) => t.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
           return { at: h.start, value: h.value, title: `${h.start.toLocaleDateString('pl-PL')} ${hm(h.start)}–${hm(end)}` };
