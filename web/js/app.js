@@ -16,6 +16,7 @@ const state = {
 };
 
 const POLAND = [52.07, 19.48];
+const POLAND_BOUNDS = [[49.0, 14.12], [54.84, 24.15]];
 
 // ───────────────────────── Narzędzia ─────────────────────────
 
@@ -135,7 +136,11 @@ function makeMap(el, opts = {}) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  addCleanup(() => map.remove());
+  // Mapa liczy swój rozmiar przy tworzeniu; gdy kontener zmieni wymiary (układ strony,
+  // pasek przewijania), dopasowujemy ją, żeby pinezka została na środku.
+  const ro = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+  ro.observe(el);
+  addCleanup(() => { ro.disconnect(); map.remove(); });
   setTimeout(() => map.invalidateSize(), 50);
   return map;
 }
@@ -285,7 +290,6 @@ function ensureShell() {
   app.innerHTML = `
     <div class="shell ${state.collapsed ? 'collapsed' : ''}">
       <aside class="sidebar glass">
-        <div class="dots hide-collapsed"><i></i><i></i><i></i></div>
         <div class="sb-head">
           <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">CloudEA</span></div>
           <button class="sb-toggle" type="button" aria-label="Zwiń menu" title="Zwiń / rozwiń menu">${icon('chevronLeft', 16)}</button>
@@ -339,11 +343,11 @@ function setActive(name) {
   app.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === name.split('?')[0]));
 }
 
-function topbar(title, crumbs = '', actions = '') {
+function topbar(title, crumbs = '', actions = '', { center = false } = {}) {
   return `
-    <div class="topbar glass">
+    <div class="topbar glass${center ? ' center' : ''}">
       <button class="btn icon ghost mobile-menu" type="button" data-mobile aria-label="Menu">${icon('road')}</button>
-      <div style="min-width:0">
+      <div class="tb-title" style="min-width:0">
         ${crumbs ? `<div class="crumbs">${crumbs}</div>` : ''}
         <h1>${title}</h1>
       </div>
@@ -362,69 +366,55 @@ function bindTopbar(root) {
 async function pageDashboard(root) {
   document.title = 'Pulpit · CloudEA';
   const since = new Date(Date.now() - 86400000).toISOString();
-  const [investments, devices, readings24, latest] = await Promise.all([
+  const [investments, devices, readings24] = await Promise.all([
     q(sb.from('investments').select('id, name, latitude, longitude').order('created_at', { ascending: false })),
     q(sb.from('devices').select('id, name, product_type, last_seen, investment_id')),
     q(sb.from('readings').select('id', { count: 'exact', head: true }).gte('created_at', since)),
-    q(sb.from('readings').select('created_at, data, device_id').order('created_at', { ascending: false }).limit(8)),
   ]);
   const connected = devices.filter((d) => typeOf(d.product_type).connected);
   const online = connected.filter((d) => isOnline(d.last_seen));
   const invById = Object.fromEntries(investments.map((i) => [i.id, i]));
-  const devById = Object.fromEntries(devices.map((d) => [d.id, d]));
   const offline = connected.filter((d) => !isOnline(d.last_seen));
 
   root.innerHTML = `
-    ${topbar('Pulpit', 'Przegląd wszystkich inwestycji', `<a class="btn primary" data-admin href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`)}
+    ${topbar('Euroasfalt inteligentne rozwiązania dla miast', 'Przegląd wszystkich inwestycji', `<a class="btn primary" data-admin href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`, { center: true })}
     <section class="stats fade-in">
       <div class="stat glass"><div class="label">${icon('road', 16)} Inwestycje</div><div class="value">${investments.length}</div></div>
       <div class="stat glass"><div class="label">${icon('chip', 16)} Urządzenia</div><div class="value">${devices.length}</div></div>
       <div class="stat glass"><div class="label">${icon('wifi', 16)} Online</div><div class="value">${online.length}<span style="font-size:16px;color:var(--muted)"> / ${connected.length}</span></div></div>
       <div class="stat glass"><div class="label">${icon('chart', 16)} Odczyty (24 h)</div><div class="value">${readings24}</div></div>
     </section>
-    <section class="grid-2">
+    <section class="${offline.length ? 'grid-2' : ''}">
       <div class="panel glass">
         <h2>Mapa inwestycji</h2>
         <p class="hint">Kliknij pinezkę, aby otworzyć inwestycję.</p>
-        <div class="map small" id="dash-map"></div>
+        <div class="map dash" id="dash-map"></div>
       </div>
-      <div class="panel glass">
-        <h2>Ostatnie odczyty</h2>
-        <p class="hint">Najnowsze dane przesłane przez sterowniki.</p>
-        <div class="list">
-          ${latest.length ? latest.map((r) => {
-            const d = devById[r.device_id] || {};
-            const inv = invById[d.investment_id] || {};
-            const ms = metricsOf(d.product_type);
-            const vals = Object.entries(r.data || {}).map(([k, v]) => {
-              const m = ms.find((x) => x.key === k);
-              return `${esc(m?.label || k)}: <b>${esc(fmtValue(m, v))}${m?.unit ? ` ${esc(m.unit)}` : ''}</b>`;
-            }).join(' · ');
-            return `<a class="row" href="#/inwestycja/${inv.id}/odczyty" style="text-decoration:none;color:inherit">
-              <div class="grow"><div class="title">${esc(inv.name || '—')} · ${esc(d.name || typeOf(d.product_type).name)}</div>
-              <div class="sub">${vals}</div></div>
-              <span class="sub">${esc(ago(r.created_at))}</span></a>`;
-          }).join('') : '<div class="empty">Brak odczytów. Pojawią się, gdy sterownik wyśle pierwsze dane.</div>'}
-        </div>
-        ${offline.length ? `<h2 style="margin-top:20px">Urządzenia offline</h2><p class="hint">Brak kontaktu dłużej niż ${ONLINE_MINUTES} min.</p>
-          <div class="list">${offline.slice(0, 6).map((d) => `
-            <a class="row" href="#/inwestycja/${d.investment_id}" style="text-decoration:none;color:inherit">
-              <div class="grow"><div class="title">${esc(d.name || typeOf(d.product_type).name)}</div>
-              <div class="sub">${esc(invById[d.investment_id]?.name || '')}</div></div>
-              <span class="status off">${esc(ago(d.last_seen))}</span></a>`).join('')}</div>` : ''}
-      </div>
+      ${offline.length ? `<div class="panel glass">
+        <h2>Urządzenia offline</h2><p class="hint">Brak kontaktu dłużej niż ${ONLINE_MINUTES} min.</p>
+        <div class="list">${offline.slice(0, 8).map((d) => `
+          <a class="row" href="#/inwestycja/${d.investment_id}" style="text-decoration:none;color:inherit">
+            <div class="grow"><div class="title">${esc(d.name || typeOf(d.product_type).name)}</div>
+            <div class="sub">${esc(invById[d.investment_id]?.name || '')}</div></div>
+            <span class="status off">${esc(ago(d.last_seen))}</span></a>`).join('')}</div>
+      </div>` : ''}
     </section>`;
   bindTopbar(root);
-  drawInvestmentPins(makeMap(root.querySelector('#dash-map'), { scroll: false }), investments);
+  // Na Pulpicie zawsze cała Polska z pinezkami inwestycji.
+  const dashMap = makeMap(root.querySelector('#dash-map'), { scroll: false });
+  drawInvestmentPins(dashMap, investments, { fit: false });
+  const showPoland = () => dashMap.fitBounds(POLAND_BOUNDS, { padding: [8, 8] });
+  showPoland(); setTimeout(showPoland, 120);
 }
 
-function drawInvestmentPins(map, investments) {
+function drawInvestmentPins(map, investments, { fit = true } = {}) {
   const pts = [];
   investments.filter((i) => i.latitude != null).forEach((i) => {
     pts.push([i.latitude, i.longitude]);
     L.marker([i.latitude, i.longitude], { icon: pinIcon() }).addTo(map)
       .bindPopup(`<b>${esc(i.name)}</b><br><a href="#/inwestycja/${i.id}">Otwórz inwestycję →</a>`);
   });
+  if (!fit) return;
   if (pts.length === 1) map.setView(pts[0], 11);
   else if (pts.length > 1) map.fitBounds(pts, { padding: [40, 40], maxZoom: 12 });
 }
@@ -1176,6 +1166,15 @@ function setupCarousel(el, inv, photos, urls, title) {
 
 // ── Zakładka: serwis ──
 
+const fmtMoney = (v) => `${Number(v || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+// Kwota wpisana z przecinkiem lub kropką; pusta = brak kosztu.
+const parseMoney = (v) => {
+  const t = String(v ?? '').replace(/\s|zł/g, '').replace(',', '.');
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+};
+
 async function tabService(el, inv) {
   const entries = await q(sb.from('service_entries').select('*').eq('investment_id', inv.id)
     .order('entry_date', { ascending: false }).order('created_at', { ascending: false }));
@@ -1190,11 +1189,12 @@ async function tabService(el, inv) {
         <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${today}" max="${today}" required></label>
         <label class="lbl svc-body">Opis prac
           <textarea class="inp" name="body" maxlength="5000" required placeholder="np. Wymiana akumulatora 12 V w AllinOne przy szkole, sprawdzono ładowanie z panelu."></textarea></label>
+        <label class="lbl svc-cost">Koszt (zł)<input class="inp" name="cost" inputmode="decimal" placeholder="np. 450,00" autocomplete="off"></label>
         <div class="svc-actions"><span class="counter" data-count>0 / 5000</span><button class="btn primary" type="submit">${icon('plus', 16)} Zapisz wpis</button></div>
       </form>
     </div>
     <div class="panel glass">
-      <h2>Historia serwisu</h2>
+      <h2 class="svc-title">Historia serwisu <span class="svc-total" title="Suma kosztów wszystkich wpisów">Łączny koszt: <b>${fmtMoney(entries.reduce((a, e) => a + Number(e.cost || 0), 0))}</b></span></h2>
       <p class="hint">${entries.length ? `${entries.length} ${entries.length === 1 ? 'wpis' : entries.length < 5 ? 'wpisy' : 'wpisów'}, od najnowszego.` : 'Brak wpisów.'}</p>
       ${entries.length ? `<ol class="timeline">${entries.map((e) => `
         <li data-entry="${e.id}">
@@ -1202,6 +1202,7 @@ async function tabService(el, inv) {
           <div class="tl-card">
             <div class="tl-head"><b>${esc(fmtDay(e.entry_date))}</b>
               <span class="sub">${esc(e.author || '')}${e.updated_at ? ' · edytowano' : ''}</span>
+              ${e.cost != null ? `<span class="tl-cost">${fmtMoney(e.cost)}</span>` : ''}
               <span class="tl-tools" ${isAdmin() || e.author_id === state.session.user.id ? '' : 'hidden'}>
                 <button class="btn icon ghost sm" type="button" data-edit title="Edytuj">${icon('edit', 15)}</button>
                 <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
@@ -1218,8 +1219,10 @@ async function tabService(el, inv) {
   form.onsubmit = async (e) => {
     e.preventDefault();
     if (!form.body.value.trim()) { toast('Wpisz opis prac.', 'err'); return; }
+    const cost = parseMoney(form.cost.value);
+    if (Number.isNaN(cost)) { toast('Koszt wpisz jako kwotę, np. 450 albo 450,50.', 'err'); return; }
     try {
-      await q(sb.from('service_entries').insert({ investment_id: inv.id, entry_date: form.entry_date.value, body: form.body.value.trim() }));
+      await q(sb.from('service_entries').insert({ investment_id: inv.id, entry_date: form.entry_date.value, body: form.body.value.trim(), cost }));
       toast('Wpis zapisany.', 'ok');
       tabService(el, inv);
     } catch (err) { fail(err); }
@@ -1231,10 +1234,13 @@ async function tabService(el, inv) {
         title: 'Edytuj wpis serwisowy',
         body: `<div class="list">
           <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${esc(entry.entry_date)}" max="${today}" required></label>
-          <label class="lbl">Opis prac<textarea class="inp" name="body" maxlength="5000" required style="min-height:160px">${esc(entry.body)}</textarea></label></div>`,
+          <label class="lbl">Opis prac<textarea class="inp" name="body" maxlength="5000" required style="min-height:160px">${esc(entry.body)}</textarea></label>
+          <label class="lbl">Koszt (zł)<input class="inp" name="cost" inputmode="decimal" value="${entry.cost != null ? esc(String(entry.cost).replace('.', ',')) : ''}" placeholder="puste = brak kosztu"></label></div>`,
       });
       if (!res) return;
-      try { await q(sb.from('service_entries').update({ entry_date: res.entry_date, body: res.body.trim() }).eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
+      const cost = parseMoney(res.cost);
+      if (Number.isNaN(cost)) { toast('Koszt wpisz jako kwotę, np. 450 albo 450,50.', 'err'); return; }
+      try { await q(sb.from('service_entries').update({ entry_date: res.entry_date, body: res.body.trim(), cost }).eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
     };
     li.querySelector('[data-del]').onclick = async () => {
       if (!await confirmDialog('Usunąć wpis?', `Wpis z dnia ${fmtDay(entry.entry_date)} zostanie usunięty.`)) return;
@@ -1375,7 +1381,11 @@ async function tabLocation(el, inv) {
   const map = makeMap(el.querySelector('#loc-map'));
   let marker = null;
   if (!admin) {
-    if (has) { marker = L.marker([inv.latitude, inv.longitude], { icon: pinIcon() }).addTo(map); map.setView([inv.latitude, inv.longitude], 14); }
+    if (has) {
+      marker = L.marker([inv.latitude, inv.longitude], { icon: pinIcon() }).addTo(map);
+      map.setView([inv.latitude, inv.longitude], 14);
+      setTimeout(() => map.setView([inv.latitude, inv.longitude], 14), 120);
+    }
     return;
   }
 
@@ -1393,7 +1403,8 @@ async function tabLocation(el, inv) {
       .on('dragend', () => { const p = marker.getLatLng(); setInputs(p.lat, p.lng); });
     if (zoom) map.setView([lat, lon], zoom);
   };
-  if (has) place(inv.latitude, inv.longitude, 14);
+  // Widok całej miejscowości; centrujemy jeszcze raz, gdy mapa ma już docelowy rozmiar.
+  if (has) { place(inv.latitude, inv.longitude, 14); setTimeout(() => map.setView([inv.latitude, inv.longitude], 14), 120); }
   map.on('click', (e) => { place(e.latlng.lat, e.latlng.lng); setInputs(e.latlng.lat, e.latlng.lng); });
 
   search.onsubmit = async (e) => {
