@@ -2,9 +2,8 @@
 //
 // Co robi:
 //  - co 20 s zwiększa "counter" o 1, losuje "napiecie" (11,8–13,2 V) i wysyła oba do bazy,
-//  - wbudowana dioda zmienia stan co 1 s (znak, że program działa),
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
-//    ustawia tornOn = true, a dioda świeci wtedy bez przerwy 10 s i wraca do migania.
+//    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s.
 //
 // Wymagane biblioteki: ArduinoJson (Menedżer bibliotek, wersja 7.x).
 // Przed kompilacją skopiuj secrets.example.h jako secrets.h i uzupełnij dane.
@@ -22,8 +21,7 @@ const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
 
 const unsigned long READING_INTERVAL_MS = 20000;  // wysyłanie odczytu
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
-const float BLINK_INTERVAL_S = 1.0;   // miganie diody
-const float LED_ON_S         = 10.0;  // ciągłe świecenie po poleceniu ze strony
+const float LED_ON_S = 10.0;  // świecenie diody po poleceniu ze strony
 
 // Nazwy danych w bazie dla typu AllinOne (zakładka Urządzenia → wybór danych).
 const char* METRIC_COUNTER = "activations";      // Ilość uruchomień
@@ -36,12 +34,9 @@ bool  tornOn = false;
 
 unsigned long lastReading = 0;
 unsigned long lastCommandCheck = 0;
-volatile bool ledState = false;
-
 WiFiClientSecure tls;
-// Dioda jest sterowana timerami, więc miga równo także wtedy, gdy ESP32 czeka na odpowiedź bazy.
-Ticker blinkTicker;
-Ticker ledOnTicker;
+// Timer gasi diodę po 10 s, także wtedy, gdy ESP32 czeka na odpowiedź bazy.
+Ticker ledOffTicker;
 
 // ───────────── Wi‑Fi ─────────────
 
@@ -141,23 +136,16 @@ void checkCommands() {
 
 // ───────────── Dioda ─────────────
 
-void toggleLed() {
-  ledState = !ledState;
-  digitalWrite(LED_PIN, ledState);
-}
-
-void startBlinking() {
+void turnOffLed() {
+  digitalWrite(LED_PIN, LOW);
   tornOn = false;
-  blinkTicker.attach(BLINK_INTERVAL_S, toggleLed);
 }
 
-// Wywoływane po poleceniu ze strony: dioda świeci 10 s bez przerwy, potem znowu miga.
+// Wywoływane po poleceniu ze strony: dioda świeci 10 s, potem gaśnie.
 void turnOnLed() {
   tornOn = true;
-  blinkTicker.detach();
-  ledState = true;
   digitalWrite(LED_PIN, HIGH);
-  ledOnTicker.once(LED_ON_S, startBlinking);
+  ledOffTicker.once(LED_ON_S, turnOffLed);
 }
 
 // ───────────── Program ─────────────
@@ -167,7 +155,6 @@ void setup() {
   delay(200);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-  startBlinking();
   randomSeed(esp_random());
 
   tls.setCACert(ROOT_CA);

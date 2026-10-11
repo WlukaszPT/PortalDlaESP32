@@ -3,8 +3,7 @@
 Program testowy `portal_esp32/portal_esp32.ino` (płytka ESP32 DevKit, Arduino IDE):
 
 - co 20 s zwiększa `counter` o 1 i losuje `napiecie` (11,8–13,2 V), a potem wysyła je do bazy jako „Ilość uruchomień” i „Napięcie akumulatora”,
-- wbudowana dioda (GPIO2) zmienia stan co 1 s, co pokazuje, że program działa,
-- co 5 s sprawdza polecenia; przycisk **Uruchom przejście** w zakładce Urządzenia ustawia `tornOn = true`, a dioda świeci wtedy bez przerwy 10 s i wraca do migania.
+- co 5 s sprawdza polecenia; przycisk **Uruchom przejście** w zakładce Urządzenia ustawia `tornOn = true`, a wbudowana niebieska dioda (GPIO2) świeci wtedy 10 s.
 
 ## Uruchomienie
 
