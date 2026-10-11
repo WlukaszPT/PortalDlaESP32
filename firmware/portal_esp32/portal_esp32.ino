@@ -66,15 +66,26 @@ int callRpc(const char* function, const JsonDocument& body, String& response) {
   HTTPClient http;
   String url = String(SUPABASE_URL) + "/rest/v1/rpc/" + function;
   if (!http.begin(tls, url)) return -2;
+  http.setConnectTimeout(10000);
   http.setTimeout(10000);
+  http.setReuse(false);  // każde zapytanie na nowym połączeniu, serwer je zamyka
   http.addHeader("apikey", SUPABASE_ANON_KEY);
   http.addHeader("Content-Type", "application/json");
 
   String payload;
   serializeJson(body, payload);
   int code = http.POST(payload);
-  response = code > 0 ? http.getString() : http.errorToString(code);
+  if (code == 204) {
+    // Pusta odpowiedź (np. potwierdzenie polecenia). Nie czytamy treści,
+    // bo HTTPClient czekałby wtedy w nieskończoność na dane, które nie przyjdą.
+    response = "";
+  } else if (code > 0) {
+    response = http.getString();
+  } else {
+    response = http.errorToString(code);
+  }
   http.end();
+  tls.stop();
   return code;
 }
 
