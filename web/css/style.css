@@ -514,3 +514,12 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .addr-search { flex-direction: column; }
 }
 .switch input:disabled + span { opacity: .55; cursor: not-allowed; }
+
+/* Rejestracja i konto czekające na zatwierdzenie */
+.switch-auth { text-align: center; margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.switch-auth a { color: var(--accent); font-weight: 600; }
+.pending-card { max-width: 520px; padding: 40px 44px; text-align: center; }
+.pending-card .brand-mark { justify-content: center; }
+.pending-card h1 { font-size: 26px; margin: 18px 0 8px; }
+.pending-card .sub { color: var(--muted); margin: 0 0 24px; line-height: 1.6; }
+.pending-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }

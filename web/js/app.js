@@ -48,7 +48,11 @@ function fail(err) {
 function translateError(err) {
   const m = err?.message || String(err);
   if (/Invalid login credentials/i.test(m)) return 'Nieprawidłowy e-mail lub hasło.';
-  if (/Email not confirmed/i.test(m)) return 'Konto nie zostało potwierdzone.';
+  if (/Email not confirmed/i.test(m)) return 'Konto nie zostało potwierdzone. Kliknij link z e-maila.';
+  if (/Signups not allowed|signup.*disabled/i.test(m)) return 'Rejestracja jest wyłączona. Poproś administratora o konto.';
+  if (/User already registered/i.test(m)) return 'Konto z tym adresem już istnieje. Zaloguj się.';
+  if (/Password should be at least/i.test(m)) return 'Hasło jest za krótkie (min. 8 znaków).';
+  if (/rate limit/i.test(m)) return 'Zbyt wiele prób. Spróbuj ponownie za kilka minut.';
   if (/maksymalnie 5 zdjęć/i.test(m)) return 'Inwestycja może mieć maksymalnie 5 zdjęć.';
   if (/Typu produktu nie można zmienić/i.test(m)) return m;
   if (/commands_payload_check/i.test(m)) return 'Dane dla ESP32 są za duże (maks. 8 kB).';
@@ -90,7 +94,7 @@ function parseCoord(v) {
 }
 
 const isAdmin = () => state.profile?.role === 'admin';
-const ROLE_LABEL = { admin: 'Administrator', user: 'Użytkownik' };
+const ROLE_LABEL = { admin: 'Administrator', user: 'Użytkownik', pending: 'Oczekuje na zatwierdzenie' };
 
 const typeOf = (code) => state.productTypes.find((t) => t.code === code) || { name: code, connected: false };
 const metricsOf = (code) => state.productMetrics.filter((m) => m.product_type === code);
@@ -185,6 +189,27 @@ function renderLogin() {
           <p style="text-align:center;margin:18px 0 0;font-size:13px">
             <a href="#" id="forgot" style="color:var(--muted)">Nie pamiętasz hasła?</a>
           </p>
+          <p class="switch-auth">Nie masz konta? <a href="#" id="to-register">Zarejestruj się</a></p>
+        </form>
+        <form class="login-form" id="register" novalidate hidden>
+          <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> CloudEA</div>
+          <h1>Rejestracja</h1>
+          <p class="sub">Załóż konto. Dostęp do danych włączy administrator.</p>
+          <label class="field">${icon('user')}
+            <input type="text" name="full_name" placeholder="Imię i nazwisko" autocomplete="name" maxlength="120" required>
+          </label>
+          <label class="field">${icon('mail')}
+            <input type="email" name="email" placeholder="Adres e-mail" autocomplete="email" required>
+          </label>
+          <label class="field">${icon('lock')}
+            <input type="password" name="password" placeholder="Hasło (min. 8 znaków)" autocomplete="new-password" minlength="8" required>
+          </label>
+          <label class="field">${icon('lock')}
+            <input type="password" name="password2" placeholder="Powtórz hasło" autocomplete="new-password" required>
+          </label>
+          <div class="form-error" id="register-error"></div>
+          <button class="btn block" type="submit">Zarejestruj</button>
+          <p class="switch-auth">Masz już konto? <a href="#" id="to-login">Zaloguj się</a></p>
         </form>
         <div class="login-hello">
           <h2>Witaj<br>ponownie!</h2>
@@ -218,6 +243,39 @@ function renderLogin() {
     if (error) err.textContent = translateError(error);
     else if (!location.hash || location.hash === '#/login') location.hash = '#/';
   };
+  const reg = app.querySelector('#register');
+  const regErr = app.querySelector('#register-error');
+  const show = (which) => {
+    form.hidden = which !== 'login'; reg.hidden = which !== 'register';
+    err.textContent = ''; regErr.textContent = '';
+    document.title = `${which === 'login' ? 'Logowanie' : 'Rejestracja'} · CloudEA`;
+    (which === 'login' ? form.email : reg.full_name).focus();
+  };
+  app.querySelector('#to-register').onclick = (e) => { e.preventDefault(); show('register'); };
+  app.querySelector('#to-login').onclick = (e) => { e.preventDefault(); show('login'); };
+  reg.onsubmit = async (e) => {
+    e.preventDefault();
+    regErr.textContent = '';
+    const fullName = reg.full_name.value.trim();
+    const email = reg.email.value.trim();
+    if (!fullName || !email || !reg.password.value) { regErr.textContent = 'Uzupełnij wszystkie pola.'; return; }
+    if (!reg.email.checkValidity()) { regErr.textContent = 'Podaj poprawny adres e-mail.'; return; }
+    if (reg.password.value.length < 8) { regErr.textContent = 'Hasło musi mieć co najmniej 8 znaków.'; return; }
+    if (reg.password.value !== reg.password2.value) { regErr.textContent = 'Hasła nie są takie same.'; return; }
+    const btn = reg.querySelector('[type=submit]');
+    btn.disabled = true; btn.textContent = 'Rejestracja…';
+    const { data, error } = await sb.auth.signUp({
+      email, password: reg.password.value,
+      options: { data: { full_name: fullName }, emailRedirectTo: location.origin + location.pathname },
+    });
+    btn.disabled = false; btn.textContent = 'Zarejestruj';
+    if (error) { regErr.textContent = translateError(error); return; }
+    if (data.session) { location.hash = '#/'; return; }
+    // Bez sesji: Supabase wymaga potwierdzenia adresu e-mail.
+    show('login');
+    form.email.value = email;
+    toast('Konto założone. Potwierdź adres e-mail linkiem z wiadomości, potem zaloguj się.', 'ok');
+  };
   app.querySelector('#forgot').onclick = async (e) => {
     e.preventDefault();
     const email = form.email.value.trim();
@@ -226,6 +284,28 @@ function renderLogin() {
     if (error) err.textContent = translateError(error);
     else toast('Wysłaliśmy link do zmiany hasła na podany e-mail.', 'ok');
   };
+}
+
+// Konto po rejestracji, którego administrator jeszcze nie zatwierdził.
+function renderPending() {
+  runCleanups();
+  document.title = 'Oczekuje na zatwierdzenie · CloudEA';
+  const email = state.session.user.email || '';
+  app.innerHTML = `
+    <div class="login-wrap">
+      <div class="panel glass fade-in pending-card">
+        <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> CloudEA</div>
+        <h1>Konto czeka na zatwierdzenie</h1>
+        <p class="sub">Zarejestrowano: <b>${esc(state.profile.full_name || email)}</b> (${esc(email)}).<br>
+          Administrator musi włączyć Twoje konto. Potem zobaczysz inwestycje i odczyty.</p>
+        <div class="pending-actions">
+          <button class="btn primary" type="button" id="pending-check">${icon('refresh', 15)} Sprawdź ponownie</button>
+          <button class="btn" type="button" id="pending-logout">${icon('logout', 15)} Wyloguj</button>
+        </div>
+      </div>
+    </div>`;
+  app.querySelector('#pending-check').onclick = () => { state.profile = null; route(); };
+  app.querySelector('#pending-logout').onclick = async () => { await sb.auth.signOut(); location.hash = '#/login'; };
 }
 
 async function setNewPassword() {
@@ -261,8 +341,10 @@ async function route() {
     try {
       state.profile = await q(sb.from('profiles').select('role, full_name, email').eq('user_id', state.session.user.id).maybeSingle());
     } catch { /* starsza baza bez ról */ }
-    state.profile ||= { role: 'user', email: state.session.user.email };
+    // Brak profilu traktujemy jak konto niezatwierdzone (baza i tak nie pokaże mu danych).
+    state.profile ||= { role: 'pending', email: state.session.user.email };
   }
+  if (state.profile.role === 'pending') { renderPending(); return; }
   document.body.classList.toggle('role-user', !isAdmin());
   ensureShell();
   runCleanups();
@@ -304,7 +386,7 @@ function ensureShell() {
           <a class="sb-link" data-nav="inwestycje" href="#/inwestycje" title="Inwestycje"><span class="bubble">${icon('road', 16)}</span><span class="hide-collapsed">Inwestycje</span><span class="badge hide-collapsed" id="offline-badge" hidden title="Urządzenia offline"></span></a>
           <a class="sb-link" data-nav="mapa" href="#/mapa" title="Mapa"><span class="bubble">${icon('map', 16)}</span><span class="hide-collapsed">Mapa</span></a>
           <a class="sb-link" data-nav="hurtownia" href="#/hurtownia" title="Hurtownia danych"><span class="bubble">${icon('database', 16)}</span><span class="hide-collapsed">Hurtownia danych</span></a>
-          ${isAdmin() ? `<a class="sb-link" data-nav="uzytkownicy" href="#/uzytkownicy" title="Użytkownicy"><span class="bubble">${icon('users', 16)}</span><span class="hide-collapsed">Użytkownicy</span></a>` : ''}
+          ${isAdmin() ? `<a class="sb-link" data-nav="uzytkownicy" href="#/uzytkownicy" title="Użytkownicy"><span class="bubble">${icon('users', 16)}</span><span class="hide-collapsed">Użytkownicy</span><span class="badge hide-collapsed" id="pending-badge" hidden title="Konta czekające na zatwierdzenie"></span></a>` : ''}
         </nav>
         <div class="sb-sep"></div>
         <div class="sb-foot">
@@ -328,6 +410,16 @@ function ensureShell() {
   };
   app.querySelector('#logout').onclick = async () => { await sb.auth.signOut(); location.hash = '#/login'; };
   refreshOfflineBadge();
+  refreshPendingBadge();
+}
+
+async function refreshPendingBadge() {
+  const b = app.querySelector('#pending-badge');
+  if (!b) return;
+  try {
+    const { count } = await sb.from('profiles').select('user_id', { count: 'exact', head: true }).eq('role', 'pending');
+    b.textContent = count || 0; b.hidden = !count;
+  } catch { /* nieistotne */ }
 }
 
 async function refreshOfflineBadge() {
@@ -1586,10 +1678,10 @@ async function pageUsers(root) {
               <div class="title">${esc(u.full_name || u.email)}${u.user_id === me ? ' <span class="pill done">to Ty</span>' : ''}</div>
               <div class="sub">${esc(u.email)} · od ${esc(new Date(u.created_at).toLocaleDateString('pl-PL'))}</div>
             </div>
-            <select class="inp role-sel" data-role ${u.role === 'admin' && admins <= 1 ? 'disabled title="Musi zostać co najmniej jeden administrator"' : ''}>
+            ${u.role === 'pending' ? `<button class="btn sm primary" type="button" data-approve>${icon('check', 15)} Zatwierdź</button>` : `<select class="inp role-sel" data-role ${u.role === 'admin' && admins <= 1 ? 'disabled title="Musi zostać co najmniej jeden administrator"' : ''}>
               <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrator</option>
               <option value="user" ${u.role === 'user' ? 'selected' : ''}>Użytkownik</option>
-            </select>
+            </select>`}
             <button class="btn icon ghost sm" type="button" data-name title="Zmień nazwę">${icon('edit', 15)}</button>
             <button class="btn icon ghost sm" type="button" data-pass title="Ustaw nowe hasło">${icon('lock', 15)}</button>
             ${u.user_id === me ? '' : `<button class="btn icon ghost sm" type="button" data-del title="Usuń konto">${icon('trash', 15)}</button>`}
@@ -1599,6 +1691,7 @@ async function pageUsers(root) {
 
   root.innerHTML = `
     ${topbar('Użytkownicy', `${users.length} ${users.length === 1 ? 'konto' : 'kont'} w bazie`, `<button class="btn primary" type="button" data-add>${icon('plus', 16)} Dodaj użytkownika</button>`)}
+    ${users.some((u) => u.role === 'pending') ? group('pending', 'Oczekujące na zatwierdzenie', 'Osoby, które same założyły konto. Do czasu zatwierdzenia nie widzą żadnych danych. Zatwierdź (rola Użytkownik) albo usuń konto.') : ''}
     ${group('admin', 'Administratorzy', 'Pełny dostęp: inwestycje, urządzenia, wysyłanie danych do ESP32, usuwanie, zarządzanie użytkownikami.')}
     ${group('user', 'Użytkownicy', 'Podgląd wszystkiego oraz dodawanie wpisów serwisowych, zdjęć i dokumentów. Bez edycji inwestycji, urządzeń i usuwania.')}`;
   bindTopbar(root);
@@ -1620,7 +1713,16 @@ async function pageUsers(root) {
 
   root.querySelectorAll('[data-user]').forEach((row) => {
     const u = users.find((x) => x.user_id === row.dataset.user);
-    row.querySelector('[data-role]').onchange = async (e) => {
+    row.querySelector('[data-approve]')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await q(sb.from('profiles').update({ role: 'user' }).eq('user_id', u.user_id));
+        toast(`${u.full_name || u.email}: konto zatwierdzone.`, 'ok');
+        refreshPendingBadge();
+        pageUsers(root);
+      } catch (err) { e.currentTarget.disabled = false; fail(err); }
+    });
+    if (row.querySelector('[data-role]')) row.querySelector('[data-role]').onchange = async (e) => {
       const role = e.target.value;
       try {
         await q(sb.from('profiles').update({ role }).eq('user_id', u.user_id));
@@ -1645,7 +1747,7 @@ async function pageUsers(root) {
     };
     row.querySelector('[data-del]')?.addEventListener('click', async () => {
       if (!await confirmDialog('Usunąć konto?', `${u.full_name || u.email} nie będzie mógł się zalogować. Wpisy serwisowe tej osoby zostaną.`)) return;
-      try { await usersApi({ action: 'delete', user_id: u.user_id }); toast('Konto usunięte.', 'ok'); pageUsers(root); } catch (err) { fail(err); }
+      try { await usersApi({ action: 'delete', user_id: u.user_id }); toast('Konto usunięte.', 'ok'); refreshPendingBadge(); pageUsers(root); } catch (err) { fail(err); }
     });
   });
 }
