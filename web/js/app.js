@@ -805,6 +805,28 @@ const RANGES = [
   ['all', 'Wszystkie (maks. 1000)', null, 0],
 ];
 
+// Liczniki narastające w sterowniku (zerowane o północy lub po restarcie).
+// W widoku godzinowym pokazujemy ich przyrost w każdej godzinie, a pozostałe dane jako średnią.
+const COUNTER_KEYS = ['activations', 'pedestrians'];
+
+// Odczyty jednej wielkości zebrane w godziny: [{ start: Date, value }].
+function hourlySeries(pts, key) {
+  const buckets = new Map();
+  let prev = null;
+  for (const r of pts) {
+    const v = r.data[key];
+    const start = new Date(r.created_at); start.setMinutes(0, 0, 0);
+    const b = buckets.get(+start) || { start, sum: 0, n: 0, inc: 0 };
+    buckets.set(+start, b);
+    b.sum += v; b.n += 1;
+    // Spadek licznika oznacza wyzerowanie, więc nowa wartość to uruchomienia od zera.
+    if (prev !== null) b.inc += v >= prev ? v - prev : v;
+    prev = v;
+  }
+  const counter = COUNTER_KEYS.includes(key);
+  return [...buckets.values()].map((b) => ({ start: b.start, value: counter ? b.inc : Math.round((b.sum / b.n) * 100) / 100 }));
+}
+
 async function tabReadings(el, inv, mode) {
   const devices = (await q(sb.from('devices').select('id, name, product_type').eq('investment_id', inv.id).order('created_at')))
     .filter((d) => typeOf(d.product_type).connected);
@@ -815,6 +837,7 @@ async function tabReadings(el, inv, mode) {
       <div class="toolbar">
         <label class="lbl">Urządzenie<select class="inp" id="r-dev">${devices.map((d) => `<option value="${d.id}">${esc(d.name || typeOf(d.product_type).name)} · ${esc(typeOf(d.product_type).name)}</option>`).join('')}</select></label>
         <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '24h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        ${mode === 'table' ? '' : `<label class="lbl">Typ wykresu<select class="inp" id="r-type"><option value="real">Rzeczywisty</option><option value="hourly">Godzinowy</option></select></label>`}
         <span style="flex:1"></span>
         <button class="btn sm" type="button" id="r-refresh">${icon('refresh', 15)} Odśwież</button>
         <button class="btn sm" type="button" id="r-csv">Pobierz CSV</button>
@@ -823,6 +846,7 @@ async function tabReadings(el, inv, mode) {
     </div>`;
   const devSel = el.querySelector('#r-dev');
   const rangeSel = el.querySelector('#r-range');
+  const typeSel = el.querySelector('#r-type');
   let current = [];
   let charts = [];
   addCleanup(() => charts.forEach((c) => c.destroy()));
@@ -853,20 +877,30 @@ async function tabReadings(el, inv, mode) {
       return;
     }
     if (!numeric.length) { body.innerHTML = '<div class="empty">To urządzenie nie wysyła danych liczbowych. Zobacz zakładkę Dane rzeczywiste.</div>'; return; }
-    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>`;
+    const hourly = typeSel?.value === 'hourly';
+    const suffix = (m) => (!hourly ? '' : COUNTER_KEYS.includes(m.key) ? ' · na godzinę' : ' · średnia godzinowa');
+    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}${suffix(m)}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>`;
 
     numeric.forEach((m) => {
-      const pts = current.filter((r) => typeof r.data?.[m.key] === 'number');
+      const raw = current.filter((r) => typeof r.data?.[m.key] === 'number');
+      // Wspólna postać dla obu typów: czas słupka, wartość i opis w dymku.
+      const pts = hourly
+        ? hourlySeries(raw, m.key).map((h) => {
+          const end = new Date(+h.start + 3600000);
+          const hm = (t) => t.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+          return { at: h.start, value: h.value, title: `${h.start.toLocaleDateString('pl-PL')} ${hm(h.start)}–${hm(end)}` };
+        })
+        : raw.map((r) => ({ at: new Date(r.created_at), value: r.data[m.key], title: fmtDate(r.created_at) }));
       const ctx = body.querySelector(`[data-chart="${CSS.escape(m.key)}"]`);
       // Na osi same godziny; przy zakresie dłuższym niż doba dodajemy dzień, żeby godziny się nie myliły.
-      const multiDay = pts.length > 1 && new Date(pts.at(-1).created_at) - new Date(pts[0].created_at) > 86400000;
-      const tick = (iso) => new Date(iso).toLocaleString('pl-PL', multiDay
+      const multiDay = pts.length > 1 && pts.at(-1).at - pts[0].at > 86400000;
+      const tick = (t) => t.toLocaleString('pl-PL', multiDay
         ? { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }
         : { hour: '2-digit', minute: '2-digit' });
       charts.push(new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: pts.map((r) => tick(r.created_at)),
+          labels: pts.map((p) => tick(p.at)),
           datasets: [{
             // Najpierw słupki na dole osi; prawdziwe wartości wstawiamy, gdy układ strony się ustali (niżej).
             label: m.label, data: pts.map(() => null),
@@ -883,13 +917,13 @@ async function tabReadings(el, inv, mode) {
           plugins: {
             legend: { display: false },
             tooltip: { callbacks: {
-              title: (items) => fmtDate(pts[items[0].dataIndex].created_at),
+              title: (items) => pts[items[0].dataIndex].title,
               label: (c) => `${fmtValue(m, c.parsed.y)}${m.unit ? ` ${m.unit}` : ''}`,
             } },
           },
           scales: {
             x: { ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#8a8f99' }, grid: { display: false } },
-            y: { ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' }, beginAtZero: m.value_type === 'integer' },
+            y: { ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' }, beginAtZero: m.value_type === 'integer' || (hourly && COUNTER_KEYS.includes(m.key)) },
           },
         },
       }));
@@ -898,7 +932,7 @@ async function tabReadings(el, inv, mode) {
       // bo zmiana rozmiaru wykresu w trakcie przerwałaby animację.
       setTimeout(() => {
         if (!chart.canvas?.isConnected) return;
-        chart.data.datasets[0].data = pts.map((r) => r.data[m.key]);
+        chart.data.datasets[0].data = pts.map((p) => p.value);
         chart.update();
       }, 150);
     });
@@ -921,6 +955,7 @@ async function tabReadings(el, inv, mode) {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
   devSel.onchange = load; rangeSel.onchange = load;
+  if (typeSel) typeSel.onchange = load;
   el.querySelector('#r-refresh').onclick = load;
   await load();
 }
@@ -1133,11 +1168,17 @@ function setupCarousel(el, inv, photos, urls, title) {
   root.querySelector('[data-next]').onclick = () => { setPlaying(false); go(cur + 1); };
   playBtn.onclick = () => setPlaying(!playing);
   root.querySelectorAll('[data-dot]').forEach((b) => { b.onclick = () => { setPlaying(false); go(+b.dataset.dot); }; });
-  root.onkeydown = (e) => {
-    if (e.key === 'ArrowLeft') { setPlaying(false); go(cur - 1); }
-    else if (e.key === 'ArrowRight') { setPlaying(false); go(cur + 1); }
+  // Strzałki działają od razu po wejściu w galerię, bez klikania w zdjęcie.
+  const onKey = (e) => {
+    if (!root.isConnected) { document.removeEventListener('keydown', onKey); return; }
+    if (document.querySelector('.lightbox, .modal-bg')) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); go(cur - 1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); setPlaying(false); go(cur + 1); }
     else if (e.key === 'Escape') closeMenu();
   };
+  document.addEventListener('keydown', onKey);
+  addCleanup(() => document.removeEventListener('keydown', onKey));
   if (el.galleryCloser) document.removeEventListener('click', el.galleryCloser);
   el.galleryCloser = closeMenu;
   document.addEventListener('click', closeMenu);
