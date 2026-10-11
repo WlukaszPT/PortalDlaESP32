@@ -23,6 +23,22 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
   - *Serwis*: historia napraw (data, opis, kto wpisał),
   - *Dokumentacja*: pliki PDF (prywatne, do 20 MB każdy).
 - **Mapa** – wszystkie inwestycje na mapie Polski.
+- **Użytkownicy** (tylko administrator) – lista kont z podziałem na administratorów i użytkowników, zmiana roli, dodawanie, reset hasła, usuwanie.
+
+## Role
+
+| | Administrator | Użytkownik |
+|---|---|---|
+| Podgląd wszystkiego | ✓ | ✓ |
+| Wpisy serwisowe | dodaje, zmienia i usuwa wszystkie | dodaje, zmienia i usuwa własne |
+| Zdjęcia i dokumenty | dodaje, zmienia, usuwa | dodaje |
+| Inwestycje, lokalizacja, urządzenia, wybór danych | ✓ | – |
+| Wysyłanie danych do ESP32 | ✓ | – |
+| Zarządzanie użytkownikami | ✓ | – |
+
+Uprawnienia pilnuje baza (reguły RLS), strona tylko ukrywa niedostępne przyciski.
+Konta zakłada funkcja `supabase/functions/admin-users` (potrzebuje klucza serwisowego, więc działa w Supabase, nie w przeglądarce).
+Wyszukiwanie adresu korzysta z bezpłatnej wyszukiwarki OpenStreetMap (Nominatim).
 
 ## Uruchomienie lokalnie
 

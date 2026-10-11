@@ -10,6 +10,7 @@ const state = {
   session: null,
   productTypes: [],
   productMetrics: [],
+  profile: null, // { role: 'admin' | 'user', full_name, email }
   collapsed: readPref('sidebar-collapsed') === '1',
   cleanups: [],
 };
@@ -50,7 +51,8 @@ function translateError(err) {
   if (/maksymalnie 5 zdjęć/i.test(m)) return 'Inwestycja może mieć maksymalnie 5 zdjęć.';
   if (/Typu produktu nie można zmienić/i.test(m)) return m;
   if (/commands_payload_check/i.test(m)) return 'Dane dla ESP32 są za duże (maks. 8 kB).';
-  if (/row-level security/i.test(m)) return 'Brak uprawnień do tej operacji.';
+  if (/row-level security/i.test(m)) return 'Brak uprawnień do tej operacji. Poproś administratora.';
+  if (/schema cache/i.test(m)) return 'Baza danych nie ma jeszcze tej funkcji. Trwa aktualizacja, spróbuj za kilka minut.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Brak połączenia z serwerem. Sprawdź internet.';
   if (/JWT expired/i.test(m)) return 'Sesja wygasła, zaloguj się ponownie.';
   return m;
@@ -85,6 +87,9 @@ function parseCoord(v) {
   const n = Number(s);
   return Number.isFinite(n) ? n : NaN;
 }
+
+const isAdmin = () => state.profile?.role === 'admin';
+const ROLE_LABEL = { admin: 'Administrator', user: 'Użytkownik' };
 
 const typeOf = (code) => state.productTypes.find((t) => t.code === code) || { name: code, connected: false };
 const metricsOf = (code) => state.productMetrics.filter((m) => m.product_type === code);
@@ -144,6 +149,7 @@ async function boot() {
   state.session = data.session;
   sb.auth.onAuthStateChange((event, session) => {
     const was = !!state.session;
+    if (state.session?.user.id !== session?.user.id) state.profile = null;
     state.session = session;
     if (event === 'PASSWORD_RECOVERY') { setNewPassword(); return; }
     if (was !== !!session) route();
@@ -246,6 +252,13 @@ async function route() {
   if (page === 'login') { location.hash = '#/'; return; }
 
   try { await loadDictionaries(); } catch (e) { fail(e); }
+  if (!state.profile) {
+    try {
+      state.profile = await q(sb.from('profiles').select('role, full_name, email').eq('user_id', state.session.user.id).maybeSingle());
+    } catch { /* starsza baza bez ról */ }
+    state.profile ||= { role: 'user', email: state.session.user.email };
+  }
+  document.body.classList.toggle('role-user', !isAdmin());
   ensureShell();
   runCleanups();
   setActive(page === 'inwestycja' ? 'inwestycje' : page || 'pulpit');
@@ -256,6 +269,7 @@ async function route() {
   try {
     if (page === 'inwestycje') await pageInvestments(content);
     else if (page === 'mapa') await pageMap(content);
+    else if (page === 'uzytkownicy' && isAdmin()) await pageUsers(content);
     else if (page === 'inwestycja' && id) await pageInvestment(content, id, tab);
     else await pageDashboard(content);
   } catch (e) {
@@ -276,8 +290,8 @@ function ensureShell() {
           <button class="sb-toggle" type="button" aria-label="Zwiń menu" title="Zwiń / rozwiń menu">${icon('chevronLeft', 16)}</button>
         </div>
         <div class="sb-user">
-          <div class="avatar">${esc(email.slice(0, 1).toUpperCase())}</div>
-          <div class="who hide-collapsed"><b title="${esc(email)}">${esc(email)}</b><span>Zalogowano</span></div>
+          <div class="avatar">${esc((state.profile.full_name || email).slice(0, 1).toUpperCase())}</div>
+          <div class="who hide-collapsed"><b title="${esc(email)}">${esc(state.profile.full_name || email)}</b><span>${ROLE_LABEL[state.profile.role] || 'Zalogowano'}</span></div>
         </div>
         <form class="sb-search hide-collapsed" id="sb-search" role="search">
           ${icon('search', 15)}<input name="q" placeholder="Szukaj inwestycji…" aria-label="Szukaj inwestycji">
@@ -287,6 +301,7 @@ function ensureShell() {
           <a class="sb-link" data-nav="pulpit" href="#/" title="Pulpit"><span class="bubble">${icon('home', 16)}</span><span class="hide-collapsed">Pulpit</span></a>
           <a class="sb-link" data-nav="inwestycje" href="#/inwestycje" title="Inwestycje"><span class="bubble">${icon('road', 16)}</span><span class="hide-collapsed">Inwestycje</span><span class="badge hide-collapsed" id="offline-badge" hidden title="Urządzenia offline"></span></a>
           <a class="sb-link" data-nav="mapa" href="#/mapa" title="Mapa"><span class="bubble">${icon('map', 16)}</span><span class="hide-collapsed">Mapa</span></a>
+          ${isAdmin() ? `<a class="sb-link" data-nav="uzytkownicy" href="#/uzytkownicy" title="Użytkownicy"><span class="bubble">${icon('users', 16)}</span><span class="hide-collapsed">Użytkownicy</span></a>` : ''}
         </nav>
         <div class="sb-sep"></div>
         <div class="sb-foot">
@@ -366,7 +381,7 @@ async function pageDashboard(root) {
   const offline = connected.filter((d) => !isOnline(d.last_seen));
 
   root.innerHTML = `
-    ${topbar('Pulpit', 'Przegląd wszystkich inwestycji', `<a class="btn primary" href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`)}
+    ${topbar('Pulpit', 'Przegląd wszystkich inwestycji', `<a class="btn primary" data-admin href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`)}
     <section class="stats fade-in">
       <div class="stat glass"><div class="label">${icon('road', 16)} Inwestycje</div><div class="value">${investments.length}</div></div>
       <div class="stat glass"><div class="label">${icon('chip', 16)} Urządzenia</div><div class="value">${devices.length}</div></div>
@@ -443,14 +458,14 @@ async function pageInvestments(root) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   const filter = (params.get('q') || '').toLowerCase();
   const [investments, devices] = await Promise.all([
-    q(sb.from('investments').select('id, name, notes, latitude, longitude, created_at').order('created_at', { ascending: false })),
+    q(sb.from('investments').select('id, name, notes, address, latitude, longitude, created_at').order('created_at', { ascending: false })),
     q(sb.from('devices').select('investment_id, product_type, last_seen')),
   ]);
   const shown = investments.filter((i) => !filter || i.name.toLowerCase().includes(filter) || (i.notes || '').toLowerCase().includes(filter));
 
   root.innerHTML = `
     ${topbar('Inwestycje', filter ? `Wyniki dla „${esc(filter)}” · <a href="#/inwestycje">wyczyść</a>` : `${investments.length} inwestycji`,
-      `<button class="btn primary" type="button" data-new>${icon('plus', 16)} Nowa inwestycja</button>`)}
+      `<button class="btn primary" type="button" data-admin data-new>${icon('plus', 16)} Nowa inwestycja</button>`)}
     <section class="inv-grid fade-in">
       ${shown.map((i) => {
         const ds = devices.filter((d) => d.investment_id === i.id);
@@ -462,15 +477,15 @@ async function pageInvestments(root) {
           <div class="meta">
             <span>${icon('chip', 14)} ${ds.length} urządz.</span>
             ${conn.length ? `<span>${icon('wifi', 14)} ${on}/${conn.length} online</span>` : ''}
-            <span>${icon('pin', 14)} ${i.latitude != null ? 'na mapie' : 'brak lokalizacji'}</span>
+            <span title="${esc(i.address || '')}">${icon('pin', 14)} ${i.address ? esc(i.address.length > 34 ? `${i.address.slice(0, 32)}…` : i.address) : i.latitude != null ? 'na mapie' : 'brak lokalizacji'}</span>
           </div></a>`;
       }).join('')}
-      <button class="inv-card glass new" type="button" data-new>${icon('plus', 26)}<span>Dodaj inwestycję</span></button>
+      <button class="inv-card glass new" type="button" data-admin data-new>${icon('plus', 26)}<span>Dodaj inwestycję</span></button>
     </section>
     ${!shown.length && filter ? '<div class="empty">Nic nie znaleziono.</div>' : ''}`;
   bindTopbar(root);
   root.querySelectorAll('[data-new]').forEach((b) => { b.onclick = newInvestment; });
-  if (params.get('nowa')) newInvestment();
+  if (params.get('nowa') && isAdmin()) newInvestment();
 }
 
 async function newInvestment() {
@@ -509,9 +524,9 @@ async function pageInvestment(root, id, tab) {
   if (!TABS.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
-    ${topbar(esc(inv.name), `<a href="#/inwestycje" style="color:var(--muted);text-decoration:none">${icon('arrowLeft', 12).replace('class="ic"', 'class="ic" style="display:inline;vertical-align:-1px"')} Inwestycje</a>${inv.notes ? ` · ${esc(inv.notes)}` : ''}`,
-      `<button class="btn sm" type="button" data-edit>${icon('edit', 15)} Edytuj</button>
-       <button class="btn sm danger" type="button" data-del>${icon('trash', 15)}</button>`)}
+    ${topbar(esc(inv.name), `<a href="#/inwestycje" style="color:var(--muted);text-decoration:none">${icon('arrowLeft', 12).replace('class="ic"', 'class="ic" style="display:inline;vertical-align:-1px"')} Inwestycje</a>${inv.notes ? ` · ${esc(inv.notes)}` : ''}${inv.address ? ` · ${esc(inv.address)}` : ''}`,
+      `<button class="btn sm" type="button" data-admin data-edit>${icon('edit', 15)} Edytuj</button>
+       <button class="btn sm danger" type="button" data-admin data-del>${icon('trash', 15)}</button>`)}
     <nav class="tabs glass" style="border-radius:999px">
       ${TABS.map(([k, label, ic]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/inwestycja/${id}/${k}">${icon(ic, 16)} ${label}</a>`).join('')}
     </nav>
@@ -534,13 +549,30 @@ async function editInvestment(inv) {
     title: 'Edytuj inwestycję',
     body: `<div class="list">
       <label class="lbl">Nazwa<input class="inp" name="name" maxlength="200" required value="${esc(inv.name)}"></label>
-      <label class="lbl">Opis<input class="inp" name="notes" value="${esc(inv.notes || '')}"></label></div>`,
+      <label class="lbl">Opis<input class="inp" name="notes" value="${esc(inv.notes || '')}"></label>
+      <label class="lbl">Dokładny adres<input class="inp" name="address" maxlength="300" value="${esc(inv.address || '')}" placeholder="np. ul. Ełcka 12, 19-330 Stare Juchy"></label>
+      <p class="hint" style="margin:0">Po zmianie adresu pinezka na mapie ustawi się automatycznie. Dokładne miejsce poprawisz w zakładce Lokalizacja.</p></div>`,
   });
   if (!res) return;
+  const address = res.address.trim() || null;
+  const patch = { name: res.name.trim(), notes: res.notes.trim() || null, address };
   try {
-    await q(sb.from('investments').update({ name: res.name.trim(), notes: res.notes.trim() || null }).eq('id', inv.id));
+    if (address && address !== inv.address) {
+      const [hit] = await geocode(address, 1);
+      if (hit) { patch.latitude = hit.lat; patch.longitude = hit.lon; } else toast('Nie znaleziono adresu na mapie. Zapisuję adres bez zmiany pinezki.', 'err');
+    }
+    await q(sb.from('investments').update(patch).eq('id', inv.id));
     toast('Zapisano.', 'ok'); route();
   } catch (e) { fail(e); }
+}
+
+// Wyszukiwanie adresu w OpenStreetMap (Nominatim, bezpłatne; max ok. 1 zapytanie na sekundę).
+async function geocode(text, limit = 5) {
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=pl&accept-language=pl&limit=${limit}&q=${encodeURIComponent(text)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error('Wyszukiwarka adresów jest chwilowo niedostępna. Spróbuj za chwilę.');
+  const rows = await res.json();
+  return rows.map((r) => ({ lat: Number(r.lat), lon: Number(r.lon), label: r.display_name }));
 }
 
 async function deleteInvestment(inv) {
@@ -568,7 +600,7 @@ async function tabDevices(el, inv) {
   ]) : [[], [], []];
 
   el.innerHTML = `
-    <div class="panel glass" style="margin-bottom:16px">
+    <div class="panel glass" data-admin style="margin-bottom:16px">
       <h2>Dodaj produkt</h2>
       <p class="hint">Sterowniki łączące się ze stroną dostaną automatycznie klucz PL-…, który wpisujesz do programu ESP32.</p>
       <form class="form-grid" id="add-dev">
@@ -625,8 +657,8 @@ function deviceCard(d, dms, readings, commands) {
       <div class="dev-head">
         <div class="dev-icon info">${icon('info', 20)}</div>
         <div class="grow"><h3>${title}</h3><div class="type">${esc(t.name)} · urządzenie informacyjne, nie łączy się ze stroną</div></div>
-        <button class="btn icon ghost" data-rename title="Zmień nazwę">${icon('edit', 16)}</button>
-        <button class="btn icon ghost" data-remove title="Usuń">${icon('trash', 16)}</button>
+        <button class="btn icon ghost" data-admin data-rename title="Zmień nazwę">${icon('edit', 16)}</button>
+        <button class="btn icon ghost" data-admin data-remove title="Usuń">${icon('trash', 16)}</button>
       </div></article>`;
   }
   const ms = metricsOf(d.product_type);
@@ -644,17 +676,17 @@ function deviceCard(d, dms, readings, commands) {
       <div class="grow"><h3>${title}</h3><div class="type">${esc(t.name)}</div></div>
       <span class="status ${on ? 'on' : 'off'}" data-status="${d.id}" title="Ostatni kontakt: ${esc(fmtDate(d.last_seen))}">${on ? 'Online' : `Offline · ${esc(ago(d.last_seen))}`}</span>
       <span class="key" title="Klucz do wpisania w programie ESP32">${esc(d.device_key)}<button type="button" data-copy="${esc(d.device_key)}" aria-label="Kopiuj klucz">${icon('copy', 15)}</button></span>
-      <button class="btn icon ghost" data-rename title="Zmień nazwę">${icon('edit', 16)}</button>
-      <button class="btn icon ghost" data-remove title="Usuń">${icon('trash', 16)}</button>
+      <button class="btn icon ghost" data-admin data-rename title="Zmień nazwę">${icon('edit', 16)}</button>
+      <button class="btn icon ghost" data-admin data-remove title="Usuń">${icon('trash', 16)}</button>
     </div>
     ${ms.length ? `<div class="metrics">
       ${ms.map((m) => `<div class="metric ${enabled[m.key] === false ? 'off' : ''}">
         <div class="m-label"><span>${esc(m.label)}</span>
-          <label class="switch" title="Czy te dane mają przychodzić na stronę"><input type="checkbox" data-metric="${esc(m.key)}" ${enabled[m.key] !== false ? 'checked' : ''}><span></span></label></div>
+          <label class="switch" title="Czy te dane mają przychodzić na stronę"><input type="checkbox" data-metric="${esc(m.key)}" ${enabled[m.key] !== false ? 'checked' : ''} ${isAdmin() ? '' : 'disabled'}><span></span></label></div>
         <div class="m-value">${esc(fmtValue(m, lastVal[m.key]))}${m.unit && lastVal[m.key] !== undefined ? `<small>${esc(m.unit)}</small>` : ''}</div>
       </div>`).join('')}
     </div>` : '<div class="hint" style="color:var(--muted);font-size:13px">Ten typ nie ma jeszcze zdefiniowanych danych.</div>'}
-    <details class="cmd">
+    <details class="cmd" data-admin>
       <summary>${icon('send', 16)} Wyślij dane do urządzenia</summary>
       <form data-cmd>
         ${enumMs.length ? `<div class="form-grid" style="margin-bottom:10px">${enumMs.map((m) => `
@@ -992,9 +1024,9 @@ function setupCarousel(el, inv, photos, urls, title) {
     const p = photos[cur];
     menu = document.createElement('div');
     menu.className = 'car-menu';
-    menu.innerHTML = `<button type="button" data-caption>${icon('edit', 15)} Zmień podpis</button>
+    menu.innerHTML = `<button type="button" data-admin data-caption>${icon('edit', 15)} Zmień podpis</button>
       <button type="button" data-download>${icon('download', 15)} Pobierz</button>
-      <button type="button" class="danger" data-delete>${icon('trash', 15)} Usuń zdjęcie</button>`;
+      <button type="button" class="danger" data-admin data-delete>${icon('trash', 15)} Usuń zdjęcie</button>`;
     card.append(menu);
     menu.onclick = (e) => e.stopPropagation();
     menu.querySelector('[data-caption]').onclick = async () => {
@@ -1090,7 +1122,7 @@ async function tabService(el, inv) {
           <div class="tl-card">
             <div class="tl-head"><b>${esc(fmtDay(e.entry_date))}</b>
               <span class="sub">${esc(e.author || '')}${e.updated_at ? ' · edytowano' : ''}</span>
-              <span class="tl-tools">
+              <span class="tl-tools" ${isAdmin() || e.author_id === state.session.user.id ? '' : 'hidden'}>
                 <button class="btn icon ghost sm" type="button" data-edit title="Edytuj">${icon('edit', 15)}</button>
                 <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
               </span>
@@ -1158,8 +1190,8 @@ async function tabDocuments(el, inv) {
           </div>
           <button class="btn sm" type="button" data-open>${icon('eye', 15)} Otwórz</button>
           <button class="btn icon ghost sm" type="button" data-download title="Pobierz">${icon('download', 15)}</button>
-          <button class="btn icon ghost sm" type="button" data-rename title="Zmień nazwę">${icon('edit', 15)}</button>
-          <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
+          <button class="btn icon ghost sm" type="button" data-admin data-rename title="Zmień nazwę">${icon('edit', 15)}</button>
+          <button class="btn icon ghost sm" type="button" data-admin data-del title="Usuń">${icon('trash', 15)}</button>
         </div>`).join('')}</div>` : `
       <label class="upload" style="margin-top:12px">${icon('file', 30)}<b>Dodaj pierwsze dokumenty PDF</b>
         <span style="font-size:12px">Możesz wybrać kilka plików naraz</span>${fileInput}</label>`}
@@ -1233,50 +1265,94 @@ async function shrinkImage(file) {
 
 async function tabLocation(el, inv) {
   const has = inv.latitude != null;
+  const admin = isAdmin();
   el.innerHTML = `
     <div class="panel glass">
       <h2>Lokalizacja</h2>
-      <p class="hint">Wpisz współrzędne albo kliknij miejsce na mapie, potem zapisz.</p>
-      <form class="form-grid" id="loc" style="margin-bottom:16px">
+      ${inv.address ? `<p class="addr">${icon('pin', 16)} ${esc(inv.address)}</p>` : ''}
+      ${admin ? `
+      <p class="hint">Wpisz dokładny adres i wybierz wynik, albo kliknij miejsce na mapie. Pinezkę można przeciągnąć. Na koniec kliknij Zapisz.</p>
+      <form class="addr-search" id="addr">
+        <label class="field-addr">${icon('search', 16)}
+          <input class="inp" name="q" value="${esc(inv.address || '')}" placeholder="np. ul. Ełcka 12, Stare Juchy" autocomplete="street-address"></label>
+        <button class="btn" type="submit">Szukaj adresu</button>
+      </form>
+      <div class="addr-results" id="addr-results" hidden></div>
+      <form class="form-grid" id="loc" style="margin:14px 0 16px">
         <label class="lbl">Szerokość (N)<input class="inp" name="lat" inputmode="decimal" placeholder="np. 53,9131" value="${has ? esc(String(inv.latitude).replace('.', ',')) : ''}"></label>
         <label class="lbl">Długość (E)<input class="inp" name="lon" inputmode="decimal" placeholder="np. 22,1756" value="${has ? esc(String(inv.longitude).replace('.', ',')) : ''}"></label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn primary" type="submit">Zapisz</button>
           <button class="btn" type="button" id="loc-gps" title="Użyj lokalizacji tego urządzenia">${icon('pin', 15)} Moja lokalizacja</button>
-          ${has ? `<button class="btn ghost" type="button" id="loc-clear">Wyczyść</button>` : ''}
+          ${has ? '<button class="btn ghost" type="button" id="loc-clear">Wyczyść</button>' : ''}
         </div>
-      </form>
+      </form>` : `<p class="hint">${has ? `Współrzędne: ${esc(String(inv.latitude).replace('.', ','))}, ${esc(String(inv.longitude).replace('.', ','))}` : 'Lokalizacja nie została jeszcze ustawiona.'}</p>`}
       <div class="map" id="loc-map"></div>
-      ${has ? `<p class="hint" style="margin:12px 0 0"><a href="https://www.google.com/maps?q=${inv.latitude},${inv.longitude}" target="_blank" rel="noopener">Otwórz w Google Maps →</a></p>` : ''}
+      ${has ? `<p class="hint" style="margin:12px 0 0"><a href="https://www.google.com/maps?q=${inv.latitude},${inv.longitude}" target="_blank" rel="noopener">Otwórz w Google Maps →</a> · <a href="https://www.google.com/maps/dir/?api=1&destination=${inv.latitude},${inv.longitude}" target="_blank" rel="noopener">Wyznacz trasę →</a></p>` : ''}
     </div>`;
 
-  const form = el.querySelector('#loc');
   const map = makeMap(el.querySelector('#loc-map'));
   let marker = null;
+  if (!admin) {
+    if (has) { marker = L.marker([inv.latitude, inv.longitude], { icon: pinIcon() }).addTo(map); map.setView([inv.latitude, inv.longitude], 14); }
+    return;
+  }
+
+  const form = el.querySelector('#loc');
+  const search = el.querySelector('#addr');
+  const results = el.querySelector('#addr-results');
+  let address = inv.address || null;
+  const setInputs = (lat, lon) => {
+    form.lat.value = lat.toFixed(6).replace('.', ',');
+    form.lon.value = lon.toFixed(6).replace('.', ',');
+  };
   const place = (lat, lon, zoom) => {
     if (marker) marker.setLatLng([lat, lon]);
     else marker = L.marker([lat, lon], { icon: pinIcon(), draggable: true }).addTo(map)
       .on('dragend', () => { const p = marker.getLatLng(); setInputs(p.lat, p.lng); });
     if (zoom) map.setView([lat, lon], zoom);
   };
-  const setInputs = (lat, lon) => {
-    form.lat.value = lat.toFixed(6).replace('.', ',');
-    form.lon.value = lon.toFixed(6).replace('.', ',');
-  };
-  if (has) place(inv.latitude, inv.longitude, 13);
+  if (has) place(inv.latitude, inv.longitude, 14);
   map.on('click', (e) => { place(e.latlng.lat, e.latlng.lng); setInputs(e.latlng.lat, e.latlng.lng); });
+
+  search.onsubmit = async (e) => {
+    e.preventDefault();
+    const text = search.q.value.trim();
+    if (text.length < 3) { toast('Wpisz adres, np. ulicę z numerem i miejscowość.', 'err'); return; }
+    const btn = search.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Szukam…';
+    try {
+      const hits = await geocode(text);
+      results.hidden = false;
+      results.innerHTML = hits.length
+        ? hits.map((h, i) => `<button type="button" class="addr-hit" data-i="${i}">${icon('pin', 15)}<span>${esc(h.label)}</span></button>`).join('')
+        : '<div class="sub" style="padding:8px 4px;color:var(--muted)">Nie znaleziono. Spróbuj dodać miejscowość albo kod pocztowy.</div>';
+      results.querySelectorAll('[data-i]').forEach((b) => {
+        b.onclick = () => {
+          const h = hits[+b.dataset.i];
+          place(h.lat, h.lon, 17); setInputs(h.lat, h.lon);
+          address = text;
+          results.hidden = true;
+          toast('Pinezka ustawiona. Popraw ją w razie potrzeby i kliknij Zapisz.', 'ok');
+        };
+      });
+      if (hits.length === 1) results.querySelector('[data-i]').click();
+    } catch (err) { fail(err); } finally { btn.disabled = false; btn.textContent = 'Szukaj adresu'; }
+  };
 
   form.onsubmit = async (e) => {
     e.preventDefault();
     const lat = parseCoord(form.lat.value);
     const lon = parseCoord(form.lon.value);
     if (lat === null || lon === null || Number.isNaN(lat) || Number.isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-      toast('Podaj obie współrzędne, np. 53,9131 i 22,1756.', 'err'); return;
+      toast('Wyszukaj adres albo podaj obie współrzędne, np. 53,9131 i 22,1756.', 'err'); return;
     }
+    const typed = search.q.value.trim();
+    if (typed && typed !== inv.address) address = typed;
     try {
-      await q(sb.from('investments').update({ latitude: lat, longitude: lon }).eq('id', inv.id));
+      await q(sb.from('investments').update({ latitude: lat, longitude: lon, address }).eq('id', inv.id));
       toast('Lokalizacja zapisana.', 'ok');
-      inv.latitude = lat; inv.longitude = lon;
+      Object.assign(inv, { latitude: lat, longitude: lon, address });
       runCleanups(); tabLocation(el, inv);
     } catch (err) { fail(err); }
   };
@@ -1290,10 +1366,104 @@ async function tabLocation(el, inv) {
   };
   el.querySelector('#loc-clear')?.addEventListener('click', async () => {
     try {
-      await q(sb.from('investments').update({ latitude: null, longitude: null }).eq('id', inv.id));
-      inv.latitude = null; inv.longitude = null;
+      await q(sb.from('investments').update({ latitude: null, longitude: null, address: null }).eq('id', inv.id));
+      Object.assign(inv, { latitude: null, longitude: null, address: null });
       runCleanups(); tabLocation(el, inv);
     } catch (err) { fail(err); }
+  });
+}
+
+// ───────────────────────── Użytkownicy (tylko administrator) ─────────────────────────
+
+async function usersApi(body) {
+  const { data, error } = await sb.functions.invoke('admin-users', { body });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch { /* zostaje ogólny komunikat */ }
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function pageUsers(root) {
+  document.title = 'Użytkownicy · Portal ESP32';
+  const users = await q(sb.from('profiles').select('*').order('role').order('created_at'));
+  const me = state.session.user.id;
+  const admins = users.filter((u) => u.role === 'admin').length;
+  const group = (role, title, hint) => {
+    const list = users.filter((u) => u.role === role);
+    return `
+      <section class="panel glass">
+        <h2>${title} <span class="count">${list.length}</span></h2>
+        <p class="hint">${hint}</p>
+        ${list.length ? `<div class="users">${list.map((u) => `
+          <div class="user" data-user="${u.user_id}">
+            <div class="avatar ${u.role}">${esc((u.full_name || u.email).slice(0, 1).toUpperCase())}</div>
+            <div class="grow" style="min-width:0">
+              <div class="title">${esc(u.full_name || u.email)}${u.user_id === me ? ' <span class="pill done">to Ty</span>' : ''}</div>
+              <div class="sub">${esc(u.email)} · od ${esc(new Date(u.created_at).toLocaleDateString('pl-PL'))}</div>
+            </div>
+            <select class="inp role-sel" data-role ${u.role === 'admin' && admins <= 1 ? 'disabled title="Musi zostać co najmniej jeden administrator"' : ''}>
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrator</option>
+              <option value="user" ${u.role === 'user' ? 'selected' : ''}>Użytkownik</option>
+            </select>
+            <button class="btn icon ghost sm" type="button" data-name title="Zmień nazwę">${icon('edit', 15)}</button>
+            <button class="btn icon ghost sm" type="button" data-pass title="Ustaw nowe hasło">${icon('lock', 15)}</button>
+            ${u.user_id === me ? '' : `<button class="btn icon ghost sm" type="button" data-del title="Usuń konto">${icon('trash', 15)}</button>`}
+          </div>`).join('')}</div>` : '<div class="empty">Brak osób w tej grupie.</div>'}
+      </section>`;
+  };
+
+  root.innerHTML = `
+    ${topbar('Użytkownicy', `${users.length} ${users.length === 1 ? 'konto' : 'kont'} w bazie`, `<button class="btn primary" type="button" data-add>${icon('plus', 16)} Dodaj użytkownika</button>`)}
+    ${group('admin', 'Administratorzy', 'Pełny dostęp: inwestycje, urządzenia, wysyłanie danych do ESP32, usuwanie, zarządzanie użytkownikami.')}
+    ${group('user', 'Użytkownicy', 'Podgląd wszystkiego oraz dodawanie wpisów serwisowych, zdjęć i dokumentów. Bez edycji inwestycji, urządzeń i usuwania.')}`;
+  bindTopbar(root);
+
+  root.querySelector('[data-add]').onclick = async () => {
+    const res = await dialog({
+      title: 'Nowy użytkownik',
+      ok: 'Utwórz konto',
+      body: `<div class="list">
+        <label class="lbl">Imię i nazwisko<input class="inp" name="full_name" maxlength="120" placeholder="np. Jan Kowalski"></label>
+        <label class="lbl">E-mail (login)<input class="inp" type="email" name="email" required autocomplete="off"></label>
+        <label class="lbl">Hasło startowe (min. 8 znaków)<input class="inp" type="text" name="password" minlength="8" required autocomplete="off"></label>
+        <label class="lbl">Rola<select class="inp" name="role"><option value="user">Użytkownik</option><option value="admin">Administrator</option></select></label>
+        <p class="hint" style="margin:0">Przekaż tej osobie e-mail i hasło. Hasło zmieni sama przez „Nie pamiętasz hasła?” na stronie logowania.</p></div>`,
+    });
+    if (!res) return;
+    try { await usersApi({ action: 'create', ...res }); toast('Konto utworzone.', 'ok'); pageUsers(root); } catch (e) { fail(e); }
+  };
+
+  root.querySelectorAll('[data-user]').forEach((row) => {
+    const u = users.find((x) => x.user_id === row.dataset.user);
+    row.querySelector('[data-role]').onchange = async (e) => {
+      const role = e.target.value;
+      try {
+        await q(sb.from('profiles').update({ role }).eq('user_id', u.user_id));
+        toast(`${u.full_name || u.email}: ${ROLE_LABEL[role]}.`, 'ok');
+        if (u.user_id === me) { state.profile.role = role; location.hash = '#/'; location.reload(); return; }
+        pageUsers(root);
+      } catch (err) { e.target.value = u.role; fail(err); }
+    };
+    row.querySelector('[data-name]').onclick = async () => {
+      const res = await dialog({ title: 'Imię i nazwisko', body: `<label class="lbl">Imię i nazwisko<input class="inp" name="full_name" maxlength="120" value="${esc(u.full_name || '')}"></label>` });
+      if (!res) return;
+      try {
+        await q(sb.from('profiles').update({ full_name: res.full_name.trim() || null }).eq('user_id', u.user_id));
+        if (u.user_id === me) state.profile.full_name = res.full_name.trim() || null;
+        pageUsers(root);
+      } catch (err) { fail(err); }
+    };
+    row.querySelector('[data-pass]').onclick = async () => {
+      const res = await dialog({ title: `Nowe hasło: ${u.email}`, body: `<label class="lbl">Nowe hasło (min. 8 znaków)<input class="inp" type="text" name="password" minlength="8" required autocomplete="off"></label>` });
+      if (!res) return;
+      try { await usersApi({ action: 'reset_password', user_id: u.user_id, password: res.password }); toast('Hasło zmienione.', 'ok'); } catch (err) { fail(err); }
+    };
+    row.querySelector('[data-del]')?.addEventListener('click', async () => {
+      if (!await confirmDialog('Usunąć konto?', `${u.full_name || u.email} nie będzie mógł się zalogować. Wpisy serwisowe tej osoby zostaną.`)) return;
+      try { await usersApi({ action: 'delete', user_id: u.user_id }); toast('Konto usunięte.', 'ok'); pageUsers(root); } catch (err) { fail(err); }
+    });
   });
 }
 

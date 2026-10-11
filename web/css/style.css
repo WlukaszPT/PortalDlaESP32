@@ -167,6 +167,10 @@ body:has(.shell) .bg::after { background: rgba(8, 9, 11, 0.62); }
 .shell.collapsed .sb-user { justify-content: center; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+/* Odstęp między nagłówkiem, zakładkami i treścią strony. */
+#content { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+/* Użytkownik bez uprawnień administratora nie widzi przycisków edycji. */
+body.role-user [data-admin] { display: none !important; }
 .topbar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; }
 .topbar h1 { margin: 0; font-size: 20px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .crumbs { color: var(--dim); font-size: 13px; }
@@ -457,3 +461,33 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ───────── Użytkownicy ───────── */
+.panel h2 .count { display: inline-grid; place-items: center; min-width: 26px; height: 22px; padding: 0 7px; margin-left: 6px; border-radius: 99px; font-size: 12px; background: var(--accent-soft); color: var(--accent); vertical-align: 2px; }
+.users { display: grid; gap: 10px; }
+.user { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px; background: rgba(255,255,255,0.04); border: 1px solid var(--line); transition: border-color .25s, transform .25s; }
+.user:hover { border-color: rgba(0,255,255,0.35); transform: translateY(-2px); }
+.user .grow { flex: 1; }
+.user .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar.admin { background: linear-gradient(145deg, #00e4ee, #008c96); color: #021416; border-color: rgba(0,255,255,0.5); }
+.user .role-sel { flex: 0 0 170px; width: 170px; padding-top: 8px; padding-bottom: 8px; }
+.user .grow { flex: 1 1 auto; min-width: 0; }
+
+/* ───────── Adres ───────── */
+.addr { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; font-weight: 600; color: var(--accent-2); }
+.addr-search { display: flex; gap: 10px; align-items: stretch; }
+.field-addr { position: relative; flex: 1; display: block; }
+.field-addr .ic { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.field-addr .inp { padding-left: 40px; width: 100%; }
+.addr-results { margin-top: 8px; display: grid; gap: 4px; padding: 6px; border-radius: 14px; background: var(--glass-strong); border: 1px solid var(--line-strong); }
+.addr-hit { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 0; border-radius: 10px; background: none; color: var(--text); font: 14px Inter, sans-serif; text-align: left; cursor: pointer; transition: background .2s; }
+.addr-hit .ic { flex: none; margin-top: 2px; color: var(--accent); }
+.addr-hit:hover { background: rgba(0,255,255,0.10); }
+@media (max-width: 820px) {
+  .user { flex-wrap: wrap; }
+  .user .grow { flex-basis: calc(100% - 60px); }
+  .user .role-sel { flex: 1 1 auto; width: auto; }
+  .addr-search { flex-direction: column; }
+}
+.switch input:disabled + span { opacity: .55; cursor: not-allowed; }
