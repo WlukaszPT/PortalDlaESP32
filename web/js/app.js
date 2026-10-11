@@ -906,7 +906,6 @@ function setupCarousel(el, inv, photos, urls, title) {
   let cur = Math.min(el.galleryStart ?? 0, n - 1);
   el.galleryStart = 0;
   let playing = false;
-  let zoomed = false; // „Powiększ” – aktywne zdjęcie w skali 120%
 
   // Najkrótsza odległość po okręgu, żeby karuzela się zapętlała.
   const offset = (i) => {
@@ -924,10 +923,7 @@ function setupCarousel(el, inv, photos, urls, title) {
       const a = Math.abs(d);
       const w = c.offsetWidth;
       c.classList.toggle('active', d === 0);
-      c.style.transform = `translate(-50%, -50%) translateX(${d * w * step}px) translateZ(${-a * 160}px) rotateY(${-Math.sign(d) * Math.min(a, 2) * 24}deg) scale(${d === 0 && zoomed ? 1.2 : 1 - Math.min(a, 2) * 0.06})`;
-      c.classList.toggle('zoomed', d === 0 && zoomed);
-      const ex = c.querySelector('[data-expand]');
-      ex.innerHTML = `${icon(d === 0 && zoomed ? 'shrink' : 'expand', 13)} ${d === 0 && zoomed ? 'Pomniejsz' : 'Powiększ'}`;
+      c.style.transform = `translate(-50%, -50%) translateX(${d * w * step}px) translateZ(${-a * 160}px) rotateY(${-Math.sign(d) * Math.min(a, 2) * 24}deg) scale(${1 - Math.min(a, 2) * 0.06})`;
       c.style.opacity = a > 2 ? '0' : String(1 - a * 0.18);
       c.style.zIndex = String(10 - a);
       c.style.pointerEvents = a > 2 ? 'none' : '';
@@ -940,7 +936,7 @@ function setupCarousel(el, inv, photos, urls, title) {
     root.querySelectorAll('[data-dot]').forEach((b, i) => b.classList.toggle('on', i === cur));
     closeMenu();
   };
-  const go = (i) => { cur = ((i % n) + n) % n; zoomed = false; render(); };
+  const go = (i) => { cur = ((i % n) + n) % n; render(); };
 
   const setPlaying = (on) => {
     playing = on && n > 1;
@@ -951,12 +947,41 @@ function setupCarousel(el, inv, photos, urls, title) {
   };
   addCleanup(() => clearInterval(el.galleryTimer));
 
+  // Podgląd na całym ekranie: zdjęcie w 120% rozmiaru dopasowanego do ekranu.
+  // Jeśli wychodzi poza ekran, można je przesuwać (kółkiem, palcem lub przeciągając).
   const openLightbox = (i) => {
     const p = photos[i];
     const lb = document.createElement('div');
     lb.className = 'lightbox';
-    lb.innerHTML = `<img src="${esc(urls[p.storage_path])}" alt="${esc(title(p, i))}">`;
-    lb.onclick = () => lb.remove();
+    lb.innerHTML = `<img src="${esc(urls[p.storage_path])}" alt="${esc(title(p, i))}" draggable="false">
+      <button class="btn icon lb-close" type="button" aria-label="Zamknij">${icon('x', 20)}</button>
+      <div class="lb-cap">${esc(title(p, i))}</div>`;
+    const img = lb.querySelector('img');
+    const close = () => { lb.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const size = () => {
+      if (!img.naturalWidth) return;
+      const fit = Math.min((innerWidth - 48) / img.naturalWidth, (innerHeight * 0.9) / img.naturalHeight, 1);
+      img.style.width = `${Math.round(img.naturalWidth * fit * 1.2)}px`;
+      img.style.height = `${Math.round(img.naturalHeight * fit * 1.2)}px`;
+      lb.scrollLeft = (lb.scrollWidth - lb.clientWidth) / 2;
+      lb.scrollTop = (lb.scrollHeight - lb.clientHeight) / 2;
+      img.classList.add('in');
+    };
+    img.onload = size;
+    if (img.complete) size();
+    // Przeciąganie myszą, gdy zdjęcie jest większe od ekranu.
+    let drag = null;
+    lb.onpointerdown = (e) => { if (e.pointerType === 'mouse' && e.target === img) drag = { x: e.clientX, y: e.clientY, l: lb.scrollLeft, t: lb.scrollTop, moved: false }; };
+    lb.onpointermove = (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x; const dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      lb.scrollLeft = drag.l - dx; lb.scrollTop = drag.t - dy;
+    };
+    lb.onpointerup = () => { setTimeout(() => { drag = null; }, 0); };
+    lb.onclick = (e) => { if (drag?.moved) return; if (e.target === img || e.target === lb || e.target.closest('.lb-close')) close(); };
+    document.addEventListener('keydown', onKey);
     document.body.append(lb);
   };
 
@@ -997,7 +1022,7 @@ function setupCarousel(el, inv, photos, urls, title) {
     c.onclick = (e) => {
       if (moved) return;
       if (e.target.closest('[data-more]')) { e.stopPropagation(); menu ? closeMenu() : openMenu(c); return; }
-      if (e.target.closest('[data-expand]')) { setPlaying(false); zoomed = !zoomed; render(); return; }
+      if (e.target.closest('[data-expand]')) { setPlaying(false); openLightbox(i); return; }
       if (offset(i) !== 0) { setPlaying(false); go(i); return; }
       openLightbox(i);
     };
@@ -1009,7 +1034,7 @@ function setupCarousel(el, inv, photos, urls, title) {
   root.onkeydown = (e) => {
     if (e.key === 'ArrowLeft') { setPlaying(false); go(cur - 1); }
     else if (e.key === 'ArrowRight') { setPlaying(false); go(cur + 1); }
-    else if (e.key === 'Escape') { closeMenu(); if (zoomed) { zoomed = false; render(); } }
+    else if (e.key === 'Escape') closeMenu();
   };
   if (el.galleryCloser) document.removeEventListener('click', el.galleryCloser);
   el.galleryCloser = closeMenu;
