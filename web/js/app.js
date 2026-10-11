@@ -798,8 +798,9 @@ function bindDeviceCards(el, inv, devices) {
 
 // ── Zakładki: wykresy i dane rzeczywiste (te same odczyty, inny widok) ──
 
-// [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz]
+// [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz, ile ostatnich odczytów]
 const RANGES = [
+  ['last20', 'Ostatnie 20 odczytów', null, 0, 20],
   ['1h', 'Ostatnia godzina', 1, 0], ['prev1h', 'Poprzednia godzina', 2, 1],
   ['8h', 'Ostatnie 8 h', 8, 0], ['24h', 'Ostatnie 24 h', 24, 0], ['7d', 'Ostatnie 7 dni', 168, 0], ['30d', 'Ostatnie 30 dni', 720, 0],
   ['all', 'Wszystkie (maks. 1000)', null, 0],
@@ -859,7 +860,7 @@ async function tabReadings(el, inv, mode) {
     <div class="panel glass">
       <div class="toolbar">
         <label class="lbl">Urządzenie<select class="inp" id="r-dev">${devices.map((d) => `<option value="${d.id}">${esc(d.name || typeOf(d.product_type).name)} · ${esc(typeOf(d.product_type).name)}</option>`).join('')}</select></label>
-        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '8h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === (mode === 'table' ? '8h' : 'last20') ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         ${mode === 'table' ? '' : `<label class="lbl">Typ wykresu<select class="inp" id="r-type"><option value="real">Rzeczywisty</option><option value="hourly">Godzinowy</option></select></label>`}
         <span style="flex:1"></span>
         <button class="btn sm" type="button" id="r-refresh">${icon('refresh', 15)} Odśwież</button>
@@ -879,8 +880,8 @@ async function tabReadings(el, inv, mode) {
     body.innerHTML = '<p class="hint">Ładowanie…</p>';
     charts.forEach((c) => c.destroy()); charts = [];
     const d = devices.find((x) => x.id === devSel.value);
-    const [, , fromH, toH] = RANGES.find(([k]) => k === rangeSel.value);
-    let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(1000);
+    const [, , fromH, toH, lim] = RANGES.find(([k]) => k === rangeSel.value);
+    let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(lim || 1000);
     if (fromH) query = query.gte('created_at', new Date(Date.now() - fromH * 3600000).toISOString());
     if (toH) query = query.lt('created_at', new Date(Date.now() - toH * 3600000).toISOString());
     try { current = (await q(query)).reverse(); } catch (e) { fail(e); return; }
@@ -919,17 +920,20 @@ async function tabReadings(el, inv, mode) {
       const xMin = fromH ? Date.now() - fromH * 3600000 : +(pts[0]?.at ?? Date.now());
       const xMax = Date.now() - toH * 3600000;
       // Na osi same godziny; przy zakresie dłuższym niż doba dodajemy dzień, żeby godziny się nie myliły.
-      const multiDay = hourly ? pts.length > 1 && pts.at(-1).at - pts[0].at > 86400000 : xMax - xMin > 86400000 + 60000;
+      // Przy „ostatnich N odczytach” słupki stoją obok siebie (oś kategorii), bo mogą dzielić je sekundy albo dni.
+      const cat = hourly || !!lim;
+      const span = pts.length > 1 ? pts.at(-1).at - pts[0].at : 0;
+      const multiDay = cat ? span > 86400000 : xMax - xMin > 86400000 + 60000;
       const tick = (t) => t.toLocaleString('pl-PL', multiDay
         ? { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }
-        : { hour: '2-digit', minute: '2-digit' });
+        : !hourly && span < 3600000 ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
       charts.push(new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: hourly ? pts.map((p) => tick(p.at)) : undefined,
+          labels: cat ? pts.map((p) => tick(p.at)) : undefined,
           datasets: [{
             // Najpierw słupki na dole osi; prawdziwe wartości wstawiamy, gdy układ strony się ustali (niżej).
-            label: m.label, data: hourly ? pts.map(() => null) : pts.map((p) => ({ x: +p.at, y: null })),
+            label: m.label, data: cat ? pts.map(() => null) : pts.map((p) => ({ x: +p.at, y: null })),
             backgroundColor: 'rgba(0,255,255,0.55)', hoverBackgroundColor: '#00ffff',
             borderColor: '#00ffff', borderWidth: { top: 2, left: 0, right: 0, bottom: 0 },
             borderRadius: { topLeft: 3, topRight: 3 }, borderSkipped: 'bottom',
@@ -948,7 +952,7 @@ async function tabReadings(el, inv, mode) {
             } },
           },
           scales: {
-            x: hourly
+            x: cat
               ? { ticks: { maxTicksLimit: 8, maxRotation: 0, color: '#8a8f99' }, grid: { display: false } }
               : {
                 type: 'linear', min: xMin, max: xMax, offset: false,
@@ -970,7 +974,7 @@ async function tabReadings(el, inv, mode) {
       setTimeout(() => {
         if (!chart.canvas?.isConnected) return;
         const ds = chart.data.datasets[0];
-        if (hourly) ds.data = pts.map((p) => p.value);
+        if (cat) ds.data = pts.map((p) => p.value);
         else {
           ds.data = pts.map((p) => ({ x: +p.at, y: p.value }));
           // Szerokość słupka z typowego odstępu między odczytami, żeby gęste dane nie zlewały się w jedną plamę.
