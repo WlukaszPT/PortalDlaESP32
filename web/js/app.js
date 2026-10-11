@@ -16,6 +16,7 @@ const state = {
 };
 
 const POLAND = [52.07, 19.48];
+const POLAND_BOUNDS = [[49.0, 14.12], [54.84, 24.15]];
 
 // ───────────────────────── Narzędzia ─────────────────────────
 
@@ -135,7 +136,11 @@ function makeMap(el, opts = {}) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  addCleanup(() => map.remove());
+  // Mapa liczy swój rozmiar przy tworzeniu; gdy kontener zmieni wymiary (układ strony,
+  // pasek przewijania), dopasowujemy ją, żeby pinezka została na środku.
+  const ro = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+  ro.observe(el);
+  addCleanup(() => { ro.disconnect(); map.remove(); });
   setTimeout(() => map.invalidateSize(), 50);
   return map;
 }
@@ -383,7 +388,7 @@ async function pageDashboard(root) {
       <div class="panel glass">
         <h2>Mapa inwestycji</h2>
         <p class="hint">Kliknij pinezkę, aby otworzyć inwestycję.</p>
-        <div class="map small" id="dash-map"></div>
+        <div class="map dash" id="dash-map"></div>
       </div>
       ${offline.length ? `<div class="panel glass">
         <h2>Urządzenia offline</h2><p class="hint">Brak kontaktu dłużej niż ${ONLINE_MINUTES} min.</p>
@@ -395,16 +400,21 @@ async function pageDashboard(root) {
       </div>` : ''}
     </section>`;
   bindTopbar(root);
-  drawInvestmentPins(makeMap(root.querySelector('#dash-map'), { scroll: false }), investments);
+  // Na Pulpicie zawsze cała Polska z pinezkami inwestycji.
+  const dashMap = makeMap(root.querySelector('#dash-map'), { scroll: false });
+  drawInvestmentPins(dashMap, investments, { fit: false });
+  const showPoland = () => dashMap.fitBounds(POLAND_BOUNDS, { padding: [8, 8] });
+  showPoland(); setTimeout(showPoland, 120);
 }
 
-function drawInvestmentPins(map, investments) {
+function drawInvestmentPins(map, investments, { fit = true } = {}) {
   const pts = [];
   investments.filter((i) => i.latitude != null).forEach((i) => {
     pts.push([i.latitude, i.longitude]);
     L.marker([i.latitude, i.longitude], { icon: pinIcon() }).addTo(map)
       .bindPopup(`<b>${esc(i.name)}</b><br><a href="#/inwestycja/${i.id}">Otwórz inwestycję →</a>`);
   });
+  if (!fit) return;
   if (pts.length === 1) map.setView(pts[0], 11);
   else if (pts.length > 1) map.fitBounds(pts, { padding: [40, 40], maxZoom: 12 });
 }
@@ -1156,6 +1166,15 @@ function setupCarousel(el, inv, photos, urls, title) {
 
 // ── Zakładka: serwis ──
 
+const fmtMoney = (v) => `${Number(v || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+// Kwota wpisana z przecinkiem lub kropką; pusta = brak kosztu.
+const parseMoney = (v) => {
+  const t = String(v ?? '').replace(/\s|zł/g, '').replace(',', '.');
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+};
+
 async function tabService(el, inv) {
   const entries = await q(sb.from('service_entries').select('*').eq('investment_id', inv.id)
     .order('entry_date', { ascending: false }).order('created_at', { ascending: false }));
@@ -1170,11 +1189,12 @@ async function tabService(el, inv) {
         <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${today}" max="${today}" required></label>
         <label class="lbl svc-body">Opis prac
           <textarea class="inp" name="body" maxlength="5000" required placeholder="np. Wymiana akumulatora 12 V w AllinOne przy szkole, sprawdzono ładowanie z panelu."></textarea></label>
+        <label class="lbl svc-cost">Koszt (zł)<input class="inp" name="cost" inputmode="decimal" placeholder="np. 450,00" autocomplete="off"></label>
         <div class="svc-actions"><span class="counter" data-count>0 / 5000</span><button class="btn primary" type="submit">${icon('plus', 16)} Zapisz wpis</button></div>
       </form>
     </div>
     <div class="panel glass">
-      <h2>Historia serwisu</h2>
+      <h2 class="svc-title">Historia serwisu <span class="svc-total" title="Suma kosztów wszystkich wpisów">Łączny koszt: <b>${fmtMoney(entries.reduce((a, e) => a + Number(e.cost || 0), 0))}</b></span></h2>
       <p class="hint">${entries.length ? `${entries.length} ${entries.length === 1 ? 'wpis' : entries.length < 5 ? 'wpisy' : 'wpisów'}, od najnowszego.` : 'Brak wpisów.'}</p>
       ${entries.length ? `<ol class="timeline">${entries.map((e) => `
         <li data-entry="${e.id}">
@@ -1182,6 +1202,7 @@ async function tabService(el, inv) {
           <div class="tl-card">
             <div class="tl-head"><b>${esc(fmtDay(e.entry_date))}</b>
               <span class="sub">${esc(e.author || '')}${e.updated_at ? ' · edytowano' : ''}</span>
+              ${e.cost != null ? `<span class="tl-cost">${fmtMoney(e.cost)}</span>` : ''}
               <span class="tl-tools" ${isAdmin() || e.author_id === state.session.user.id ? '' : 'hidden'}>
                 <button class="btn icon ghost sm" type="button" data-edit title="Edytuj">${icon('edit', 15)}</button>
                 <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
@@ -1198,8 +1219,10 @@ async function tabService(el, inv) {
   form.onsubmit = async (e) => {
     e.preventDefault();
     if (!form.body.value.trim()) { toast('Wpisz opis prac.', 'err'); return; }
+    const cost = parseMoney(form.cost.value);
+    if (Number.isNaN(cost)) { toast('Koszt wpisz jako kwotę, np. 450 albo 450,50.', 'err'); return; }
     try {
-      await q(sb.from('service_entries').insert({ investment_id: inv.id, entry_date: form.entry_date.value, body: form.body.value.trim() }));
+      await q(sb.from('service_entries').insert({ investment_id: inv.id, entry_date: form.entry_date.value, body: form.body.value.trim(), cost }));
       toast('Wpis zapisany.', 'ok');
       tabService(el, inv);
     } catch (err) { fail(err); }
@@ -1211,10 +1234,13 @@ async function tabService(el, inv) {
         title: 'Edytuj wpis serwisowy',
         body: `<div class="list">
           <label class="lbl">Data<input class="inp" type="date" name="entry_date" value="${esc(entry.entry_date)}" max="${today}" required></label>
-          <label class="lbl">Opis prac<textarea class="inp" name="body" maxlength="5000" required style="min-height:160px">${esc(entry.body)}</textarea></label></div>`,
+          <label class="lbl">Opis prac<textarea class="inp" name="body" maxlength="5000" required style="min-height:160px">${esc(entry.body)}</textarea></label>
+          <label class="lbl">Koszt (zł)<input class="inp" name="cost" inputmode="decimal" value="${entry.cost != null ? esc(String(entry.cost).replace('.', ',')) : ''}" placeholder="puste = brak kosztu"></label></div>`,
       });
       if (!res) return;
-      try { await q(sb.from('service_entries').update({ entry_date: res.entry_date, body: res.body.trim() }).eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
+      const cost = parseMoney(res.cost);
+      if (Number.isNaN(cost)) { toast('Koszt wpisz jako kwotę, np. 450 albo 450,50.', 'err'); return; }
+      try { await q(sb.from('service_entries').update({ entry_date: res.entry_date, body: res.body.trim(), cost }).eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
     };
     li.querySelector('[data-del]').onclick = async () => {
       if (!await confirmDialog('Usunąć wpis?', `Wpis z dnia ${fmtDay(entry.entry_date)} zostanie usunięty.`)) return;
@@ -1355,7 +1381,11 @@ async function tabLocation(el, inv) {
   const map = makeMap(el.querySelector('#loc-map'));
   let marker = null;
   if (!admin) {
-    if (has) { marker = L.marker([inv.latitude, inv.longitude], { icon: pinIcon() }).addTo(map); map.setView([inv.latitude, inv.longitude], 14); }
+    if (has) {
+      marker = L.marker([inv.latitude, inv.longitude], { icon: pinIcon() }).addTo(map);
+      map.setView([inv.latitude, inv.longitude], 14);
+      setTimeout(() => map.setView([inv.latitude, inv.longitude], 14), 120);
+    }
     return;
   }
 
@@ -1373,7 +1403,8 @@ async function tabLocation(el, inv) {
       .on('dragend', () => { const p = marker.getLatLng(); setInputs(p.lat, p.lng); });
     if (zoom) map.setView([lat, lon], zoom);
   };
-  if (has) place(inv.latitude, inv.longitude, 14);
+  // Widok całej miejscowości; centrujemy jeszcze raz, gdy mapa ma już docelowy rozmiar.
+  if (has) { place(inv.latitude, inv.longitude, 14); setTimeout(() => map.setView([inv.latitude, inv.longitude], 14), 120); }
   map.on('click', (e) => { place(e.latlng.lat, e.latlng.lng); setInputs(e.latlng.lat, e.latlng.lng); });
 
   search.onsubmit = async (e) => {
