@@ -820,58 +820,61 @@ async function tabReadings(el, inv) {
 // ── Zakładka: galeria ──
 
 async function tabGallery(el, inv) {
+  clearInterval(el.galleryTimer);
   const photos = await q(sb.from('investment_photos').select('*').eq('investment_id', inv.id).order('sort_order').order('created_at'));
-  let urls = {};
+  const urls = {};
   if (photos.length) {
     const { data } = await sb.storage.from(PHOTO_BUCKET).createSignedUrls(photos.map((p) => p.storage_path), 3600);
     (data || []).forEach((u) => { urls[u.path] = u.signedUrl; });
   }
+  const n = photos.length;
+  const free = MAX_PHOTOS - n;
+  const title = (p, i) => p.caption || `${inv.name} · zdjęcie ${i + 1}`;
+  const fileInput = '<input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>';
+
   el.innerHTML = `
     <div class="panel glass">
-      <h2>Galeria</h2>
-      <p class="hint">${photos.length} z ${MAX_PHOTOS} zdjęć. Duże zdjęcia są automatycznie zmniejszane przed wysłaniem.</p>
-      <div class="gallery">
-        ${photos.map((p) => `<figure class="photo" style="margin:0" data-photo="${p.id}">
-          <img src="${esc(urls[p.storage_path] || '')}" alt="${esc(p.caption || 'Zdjęcie inwestycji')}" loading="lazy">
-          ${p.caption ? `<figcaption class="cap">${esc(p.caption)}</figcaption>` : ''}
-          <div class="del" style="display:flex;gap:6px">
-            <button class="btn icon sm" type="button" data-caption title="Podpis">${icon('edit', 15)}</button>
-            <button class="btn icon sm danger" type="button" data-delete title="Usuń">${icon('trash', 15)}</button>
-          </div></figure>`).join('')}
-        ${photos.length < MAX_PHOTOS ? `<label class="upload">${icon('upload', 26)}<b>Dodaj zdjęcia</b><span style="font-size:12px">JPEG, PNG lub WebP · jeszcze ${MAX_PHOTOS - photos.length}</span>
-          <input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>` : ''}
+      <div class="gal-head">
+        <div class="grow"><h2>Galeria</h2>
+          <p class="hint" style="margin:0">${n} z ${MAX_PHOTOS} zdjęć. Duże zdjęcia są automatycznie zmniejszane przed wysłaniem.</p></div>
+        ${n && free > 0 ? `<label class="btn primary sm upload-btn">${icon('upload', 15)} <span>Dodaj zdjęcia</span>${fileInput}</label>` : ''}
       </div>
+      ${n ? `
+      <div class="carousel" tabindex="0" aria-roledescription="karuzela" aria-label="Zdjęcia inwestycji">
+        <div class="car-stage">
+          ${photos.map((p, i) => `
+          <figure class="car-card" data-i="${i}">
+            <div class="img"><img src="${esc(urls[p.storage_path] || '')}" alt="${esc(title(p, i))}" draggable="false"></div>
+            <div class="car-tools">
+              <button class="car-pill" type="button" data-expand>${icon('expand', 13)} Powiększ</button>
+              <button class="car-pill round" type="button" data-more aria-label="Więcej opcji">${icon('more', 16)}</button>
+            </div>
+            <figcaption>
+              <div class="t"><b>${esc(title(p, i))}</b><span class="n">${i + 1} / ${n}</span></div>
+              <div class="d">${icon('calendar', 13)} Dodano ${esc(fmtDate(p.created_at))}</div>
+            </figcaption>
+            <div class="veil"></div>
+          </figure>`).join('')}
+        </div>
+        <div class="car-bar glass">
+          <button class="btn icon ghost" type="button" data-prev aria-label="Poprzednie">${icon('chevronLeft', 18)}</button>
+          <button class="btn icon ghost" type="button" data-play aria-label="Odtwarzaj">${icon('play', 16)}</button>
+          <div class="car-now"><img alt=""><div><b></b><span></span></div></div>
+          <button class="btn icon ghost" type="button" data-next aria-label="Następne">${icon('chevronRight', 18)}</button>
+        </div>
+        <div class="car-dots">${photos.map((_, i) => `<button type="button" data-dot="${i}" aria-label="Zdjęcie ${i + 1}"></button>`).join('')}</div>
+      </div>` : `
+      <label class="upload">${icon('upload', 30)}<b>Dodaj pierwsze zdjęcia</b>
+        <span style="font-size:12px">JPEG, PNG lub WebP · maksymalnie ${MAX_PHOTOS}</span>${fileInput}</label>`}
     </div>`;
 
-  el.querySelectorAll('[data-photo]').forEach((fig) => {
-    const p = photos.find((x) => x.id === fig.dataset.photo);
-    fig.querySelector('img').onclick = () => {
-      const lb = document.createElement('div');
-      lb.className = 'lightbox';
-      lb.innerHTML = `<img src="${esc(urls[p.storage_path])}" alt="${esc(p.caption || '')}">`;
-      lb.onclick = () => lb.remove();
-      document.body.append(lb);
-    };
-    fig.querySelector('[data-caption]').onclick = async () => {
-      const res = await dialog({ title: 'Podpis zdjęcia', body: `<label class="lbl">Podpis<input class="inp" name="caption" maxlength="300" value="${esc(p.caption || '')}"></label>` });
-      if (!res) return;
-      try { await q(sb.from('investment_photos').update({ caption: res.caption.trim() || null }).eq('id', p.id)); tabGallery(el, inv); } catch (e) { fail(e); }
-    };
-    fig.querySelector('[data-delete]').onclick = async () => {
-      if (!await confirmDialog('Usunąć zdjęcie?', 'Zdjęcie zostanie trwale usunięte.')) return;
-      try {
-        await q(sb.from('investment_photos').delete().eq('id', p.id));
-        await sb.storage.from(PHOTO_BUCKET).remove([p.storage_path]);
-        tabGallery(el, inv);
-      } catch (e) { fail(e); }
-    };
-  });
+  if (n) setupCarousel(el, inv, photos, urls, title);
 
-  const input = el.querySelector('.upload input');
+  const input = el.querySelector('input[type=file]');
   if (input) input.onchange = async () => {
-    const files = [...input.files].slice(0, MAX_PHOTOS - photos.length);
+    const files = [...input.files].slice(0, free);
     if (input.files.length > files.length) toast(`Dodam tylko ${files.length}, limit to ${MAX_PHOTOS} zdjęć.`, 'err');
-    const label = el.querySelector('.upload b');
+    const label = input.closest('label').querySelector('b, span');
     for (const [i, file] of files.entries()) {
       label.textContent = `Wysyłanie ${i + 1} z ${files.length}…`;
       try {
@@ -879,12 +882,148 @@ async function tabGallery(el, inv) {
         const path = `${inv.id}/${crypto.randomUUID()}.${blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg'}`;
         const { error } = await sb.storage.from(PHOTO_BUCKET).upload(path, blob, { contentType: blob.type });
         if (error) throw error;
-        const { error: e2 } = await sb.from('investment_photos').insert({ investment_id: inv.id, storage_path: path, sort_order: photos.length + i });
+        const { error: e2 } = await sb.from('investment_photos').insert({ investment_id: inv.id, storage_path: path, sort_order: n + i });
         if (e2) { await sb.storage.from(PHOTO_BUCKET).remove([path]); throw e2; }
       } catch (e) { fail(e); break; }
     }
+    el.galleryStart = n; // po dodaniu pokaż pierwsze nowe zdjęcie
     tabGallery(el, inv);
   };
+}
+
+// Karuzela 3D: środkowe zdjęcie na wierzchu, sąsiednie obrócone w perspektywie.
+function setupCarousel(el, inv, photos, urls, title) {
+  const n = photos.length;
+  const root = el.querySelector('.carousel');
+  const cards = [...root.querySelectorAll('.car-card')];
+  const playBtn = root.querySelector('[data-play]');
+  let cur = Math.min(el.galleryStart ?? 0, n - 1);
+  el.galleryStart = 0;
+  let playing = false;
+
+  // Najkrótsza odległość po okręgu, żeby karuzela się zapętlała.
+  const offset = (i) => {
+    let d = i - cur;
+    if (d > n / 2) d -= n;
+    if (d < -n / 2) d += n;
+    return d;
+  };
+
+  const render = () => {
+    const narrow = root.clientWidth < 640;
+    const step = narrow ? 0.55 : 0.62;
+    cards.forEach((c, i) => {
+      const d = offset(i);
+      const a = Math.abs(d);
+      const w = c.offsetWidth;
+      c.classList.toggle('active', d === 0);
+      c.style.transform = `translate(-50%, -50%) translateX(${d * w * step}px) translateZ(${-a * 160}px) rotateY(${-Math.sign(d) * Math.min(a, 2) * 24}deg) scale(${1 - Math.min(a, 2) * 0.06})`;
+      c.style.opacity = a > 2 ? '0' : String(1 - a * 0.18);
+      c.style.zIndex = String(10 - a);
+      c.style.pointerEvents = a > 2 ? 'none' : '';
+      c.setAttribute('aria-hidden', d === 0 ? 'false' : 'true');
+    });
+    const p = photos[cur];
+    root.querySelector('.car-now img').src = urls[p.storage_path] || '';
+    root.querySelector('.car-now b').textContent = title(p, cur);
+    root.querySelector('.car-now span').textContent = `${cur + 1} z ${n} · ${fmtDate(p.created_at)}`;
+    root.querySelectorAll('[data-dot]').forEach((b, i) => b.classList.toggle('on', i === cur));
+    closeMenu();
+  };
+  const go = (i) => { cur = ((i % n) + n) % n; render(); };
+
+  const setPlaying = (on) => {
+    playing = on && n > 1;
+    clearInterval(el.galleryTimer);
+    if (playing) el.galleryTimer = setInterval(() => go(cur + 1), 4500);
+    playBtn.innerHTML = icon(playing ? 'pause' : 'play', 16);
+    playBtn.setAttribute('aria-label', playing ? 'Zatrzymaj' : 'Odtwarzaj');
+  };
+  addCleanup(() => clearInterval(el.galleryTimer));
+
+  const openLightbox = (i) => {
+    const p = photos[i];
+    const lb = document.createElement('div');
+    lb.className = 'lightbox';
+    lb.innerHTML = `<img src="${esc(urls[p.storage_path])}" alt="${esc(title(p, i))}">`;
+    lb.onclick = () => lb.remove();
+    document.body.append(lb);
+  };
+
+  let menu = null;
+  function closeMenu() { menu?.remove(); menu = null; }
+  const openMenu = (card) => {
+    closeMenu();
+    const p = photos[cur];
+    menu = document.createElement('div');
+    menu.className = 'car-menu';
+    menu.innerHTML = `<button type="button" data-caption>${icon('edit', 15)} Zmień podpis</button>
+      <button type="button" data-download>${icon('upload', 15).replace('<svg', '<svg style="transform:rotate(180deg)"')} Pobierz</button>
+      <button type="button" class="danger" data-delete>${icon('trash', 15)} Usuń zdjęcie</button>`;
+    card.append(menu);
+    menu.onclick = (e) => e.stopPropagation();
+    menu.querySelector('[data-caption]').onclick = async () => {
+      closeMenu();
+      const res = await dialog({ title: 'Podpis zdjęcia', body: `<label class="lbl">Podpis<input class="inp" name="caption" maxlength="300" value="${esc(p.caption || '')}" placeholder="np. Przejście przy szkole – widok od północy"></label>` });
+      if (!res) return;
+      try {
+        await q(sb.from('investment_photos').update({ caption: res.caption.trim() || null }).eq('id', p.id));
+        el.galleryStart = cur; tabGallery(el, inv);
+      } catch (e) { fail(e); }
+    };
+    menu.querySelector('[data-download]').onclick = () => { closeMenu(); window.open(urls[p.storage_path], '_blank', 'noopener'); };
+    menu.querySelector('[data-delete]').onclick = async () => {
+      closeMenu();
+      if (!await confirmDialog('Usunąć zdjęcie?', 'Zdjęcie zostanie trwale usunięte.')) return;
+      try {
+        await q(sb.from('investment_photos').delete().eq('id', p.id));
+        await sb.storage.from(PHOTO_BUCKET).remove([p.storage_path]);
+        el.galleryStart = Math.max(0, cur - 1); tabGallery(el, inv);
+      } catch (e) { fail(e); }
+    };
+  };
+
+  cards.forEach((c, i) => {
+    c.onclick = (e) => {
+      if (moved) return;
+      if (e.target.closest('[data-more]')) { e.stopPropagation(); menu ? closeMenu() : openMenu(c); return; }
+      if (offset(i) !== 0) { setPlaying(false); go(i); return; }
+      openLightbox(i);
+    };
+  });
+  root.querySelector('[data-prev]').onclick = () => { setPlaying(false); go(cur - 1); };
+  root.querySelector('[data-next]').onclick = () => { setPlaying(false); go(cur + 1); };
+  playBtn.onclick = () => setPlaying(!playing);
+  root.querySelectorAll('[data-dot]').forEach((b) => { b.onclick = () => { setPlaying(false); go(+b.dataset.dot); }; });
+  root.onkeydown = (e) => {
+    if (e.key === 'ArrowLeft') { setPlaying(false); go(cur - 1); }
+    else if (e.key === 'ArrowRight') { setPlaying(false); go(cur + 1); }
+    else if (e.key === 'Escape') closeMenu();
+  };
+  if (el.galleryCloser) document.removeEventListener('click', el.galleryCloser);
+  el.galleryCloser = closeMenu;
+  document.addEventListener('click', closeMenu);
+  addCleanup(() => document.removeEventListener('click', closeMenu));
+
+  // Przesuwanie palcem lub myszą.
+  const stage = root.querySelector('.car-stage');
+  let startX = null;
+  let moved = false;
+  stage.onpointerdown = (e) => { startX = e.clientX; moved = false; };
+  stage.onpointermove = (e) => { if (startX !== null && Math.abs(e.clientX - startX) > 8) moved = true; };
+  stage.onpointerup = (e) => {
+    if (startX === null) return;
+    const dx = e.clientX - startX;
+    startX = null;
+    if (Math.abs(dx) > 40) { setPlaying(false); go(cur + (dx < 0 ? 1 : -1)); }
+    setTimeout(() => { moved = false; }, 0);
+  };
+  stage.onpointercancel = () => { startX = null; };
+
+  const ro = new ResizeObserver(render);
+  ro.observe(root);
+  addCleanup(() => ro.disconnect());
+  render();
 }
 
 // Zmniejsza zdjęcia z telefonu do max 1920 px (JPEG), żeby zmieściły się w limicie 5 MB.
