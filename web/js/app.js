@@ -160,12 +160,12 @@ async function boot() {
 
 function renderLogin() {
   runCleanups();
-  document.title = 'Logowanie · Portal ESP32';
+  document.title = 'Logowanie · CloudEA';
   app.innerHTML = `
     <div class="login-wrap">
       <div class="login-card glass fade-in">
         <form class="login-form" id="login" novalidate>
-          <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> Portal ESP32</div>
+          <div class="brand-mark"><span class="logo">${icon('road', 20)}</span> CloudEA</div>
           <h1>Logowanie</h1>
           <p class="sub">Zaloguj się, aby zarządzać inwestycjami i sterownikami.</p>
           <label class="field">${icon('mail')}
@@ -286,7 +286,7 @@ function ensureShell() {
       <aside class="sidebar glass">
         <div class="dots hide-collapsed"><i></i><i></i><i></i></div>
         <div class="sb-head">
-          <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">Portal ESP32</span></div>
+          <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">CloudEA</span></div>
           <button class="sb-toggle" type="button" aria-label="Zwiń menu" title="Zwiń / rozwiń menu">${icon('chevronLeft', 16)}</button>
         </div>
         <div class="sb-user">
@@ -366,7 +366,7 @@ function bindTopbar(root) {
 // ───────────────────────── Pulpit ─────────────────────────
 
 async function pageDashboard(root) {
-  document.title = 'Pulpit · Portal ESP32';
+  document.title = 'Pulpit · CloudEA';
   const since = new Date(Date.now() - 86400000).toISOString();
   const [investments, devices, readings24, latest] = await Promise.all([
     q(sb.from('investments').select('id, name, latitude, longitude').order('created_at', { ascending: false })),
@@ -438,7 +438,7 @@ function drawInvestmentPins(map, investments) {
 // ───────────────────────── Mapa ─────────────────────────
 
 async function pageMap(root) {
-  document.title = 'Mapa · Portal ESP32';
+  document.title = 'Mapa · CloudEA';
   const investments = await q(sb.from('investments').select('id, name, latitude, longitude'));
   const without = investments.filter((i) => i.latitude == null);
   root.innerHTML = `
@@ -454,7 +454,7 @@ async function pageMap(root) {
 // ───────────────────────── Lista inwestycji ─────────────────────────
 
 async function pageInvestments(root) {
-  document.title = 'Inwestycje · Portal ESP32';
+  document.title = 'Inwestycje · CloudEA';
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   const filter = (params.get('q') || '').toLowerCase();
   const [investments, devices] = await Promise.all([
@@ -520,7 +520,7 @@ const TABS = [
 async function pageInvestment(root, id, tab) {
   const inv = await q(sb.from('investments').select('*').eq('id', id).maybeSingle());
   if (!inv) { root.innerHTML = `<div class="panel glass"><h2>Nie znaleziono inwestycji</h2><a class="btn" href="#/inwestycje">Wróć do listy</a></div>`; return; }
-  document.title = `${inv.name} · Portal ESP32`;
+  document.title = `${inv.name} · CloudEA`;
   if (!TABS.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
@@ -762,7 +762,12 @@ function bindDeviceCards(el, inv, devices) {
 
 // ── Zakładka: odczyty ──
 
-const RANGES = [['24h', 'Ostatnie 24 h', 1], ['7d', 'Ostatnie 7 dni', 7], ['30d', 'Ostatnie 30 dni', 30], ['all', 'Wszystkie (maks. 1000)', null]];
+// [klucz, etykieta, od ilu godzin wstecz, do ilu godzin wstecz]
+const RANGES = [
+  ['1h', 'Ostatnia godzina', 1, 0], ['prev1h', 'Poprzednia godzina', 2, 1],
+  ['24h', 'Ostatnie 24 h', 24, 0], ['7d', 'Ostatnie 7 dni', 168, 0], ['30d', 'Ostatnie 30 dni', 720, 0],
+  ['all', 'Wszystkie (maks. 1000)', null, 0],
+];
 
 async function tabReadings(el, inv) {
   const devices = (await q(sb.from('devices').select('id, name, product_type').eq('investment_id', inv.id).order('created_at')))
@@ -773,7 +778,7 @@ async function tabReadings(el, inv) {
     <div class="panel glass">
       <div class="toolbar">
         <label class="lbl">Urządzenie<select class="inp" id="r-dev">${devices.map((d) => `<option value="${d.id}">${esc(d.name || typeOf(d.product_type).name)} · ${esc(typeOf(d.product_type).name)}</option>`).join('')}</select></label>
-        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+        <label class="lbl">Zakres<select class="inp" id="r-range">${RANGES.map(([k, l]) => `<option value="${k}"${k === '24h' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         <span style="flex:1"></span>
         <button class="btn sm" type="button" id="r-refresh">${icon('refresh', 15)} Odśwież</button>
         <button class="btn sm" type="button" id="r-csv">Pobierz CSV</button>
@@ -791,9 +796,10 @@ async function tabReadings(el, inv) {
     body.innerHTML = '<p class="hint">Ładowanie…</p>';
     charts.forEach((c) => c.destroy()); charts = [];
     const d = devices.find((x) => x.id === devSel.value);
-    const days = RANGES.find(([k]) => k === rangeSel.value)[2];
+    const [, , fromH, toH] = RANGES.find(([k]) => k === rangeSel.value);
     let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(1000);
-    if (days) query = query.gte('created_at', new Date(Date.now() - days * 86400000).toISOString());
+    if (fromH) query = query.gte('created_at', new Date(Date.now() - fromH * 3600000).toISOString());
+    if (toH) query = query.lt('created_at', new Date(Date.now() - toH * 3600000).toISOString());
     try { current = (await q(query)).reverse(); } catch (e) { fail(e); return; }
     const ms = metricsOf(d.product_type);
     const keys = [...new Set(current.flatMap((r) => Object.keys(r.data || {})))];
@@ -1386,7 +1392,7 @@ async function usersApi(body) {
 }
 
 async function pageUsers(root) {
-  document.title = 'Użytkownicy · Portal ESP32';
+  document.title = 'Użytkownicy · CloudEA';
   const users = await q(sb.from('profiles').select('*').order('role').order('created_at'));
   const me = state.session.user.id;
   const admins = users.filter((u) => u.role === 'admin').length;
