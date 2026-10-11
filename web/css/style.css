@@ -127,10 +127,6 @@ body:has(.shell) .bg::after { background: rgba(8, 9, 11, 0.62); }
   transition: width .3s ease;
 }
 .shell.collapsed .sidebar { width: var(--sidebar-collapsed); }
-.dots { display: flex; gap: 6px; padding: 0 8px 14px; }
-.dots i { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
-.dots i:nth-child(2) { background: #eab308; }
-.dots i:nth-child(3) { background: #22c55e; }
 .sb-head { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 14px; border-bottom: 1px solid var(--line); gap: 8px; }
 .sb-title { font-weight: 700; font-size: 17px; white-space: nowrap; display: flex; align-items: center; gap: 10px; }
 .sb-title .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: #111; display: grid; place-items: center; flex: none; }
@@ -177,6 +173,10 @@ body.role-user [data-admin] { display: none !important; }
 .topbar h1 { margin: 0; font-size: 20px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .crumbs { color: var(--dim); font-size: 13px; }
 .topbar .spacer { flex: 1; }
+/* Nagłówek wyśrodkowany (Pulpit): tytuł na środku paska, przyciski zostają po prawej. */
+.topbar.center { position: relative; min-height: 64px; }
+.topbar.center .tb-title { position: absolute; left: 50%; transform: translateX(-50%); text-align: center; max-width: calc(100% - 420px); }
+.topbar.center h1 { white-space: normal; font-size: 22px; }
 .mobile-menu { display: none; }
 .panel { padding: 22px; }
 .panel h2 { margin: 0 0 4px; font-size: 17px; }
@@ -372,6 +372,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .car-card { --w: 72%; }
   .topbar { flex-wrap: wrap; }
   .topbar h1 { white-space: normal; }
+  .topbar.center .tb-title { position: static; transform: none; max-width: none; flex: 1 1 100%; order: 2; }
   .car-stage { height: clamp(300px, 92vw, 420px); }
 }
 @media (prefers-reduced-motion: reduce) { .car-card { transition: none; } }

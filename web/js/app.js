@@ -285,7 +285,6 @@ function ensureShell() {
   app.innerHTML = `
     <div class="shell ${state.collapsed ? 'collapsed' : ''}">
       <aside class="sidebar glass">
-        <div class="dots hide-collapsed"><i></i><i></i><i></i></div>
         <div class="sb-head">
           <div class="sb-title"><span class="logo">${icon('road', 18)}</span><span class="hide-collapsed">CloudEA</span></div>
           <button class="sb-toggle" type="button" aria-label="Zwiń menu" title="Zwiń / rozwiń menu">${icon('chevronLeft', 16)}</button>
@@ -339,11 +338,11 @@ function setActive(name) {
   app.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === name.split('?')[0]));
 }
 
-function topbar(title, crumbs = '', actions = '') {
+function topbar(title, crumbs = '', actions = '', { center = false } = {}) {
   return `
-    <div class="topbar glass">
+    <div class="topbar glass${center ? ' center' : ''}">
       <button class="btn icon ghost mobile-menu" type="button" data-mobile aria-label="Menu">${icon('road')}</button>
-      <div style="min-width:0">
+      <div class="tb-title" style="min-width:0">
         ${crumbs ? `<div class="crumbs">${crumbs}</div>` : ''}
         <h1>${title}</h1>
       </div>
@@ -362,57 +361,38 @@ function bindTopbar(root) {
 async function pageDashboard(root) {
   document.title = 'Pulpit · CloudEA';
   const since = new Date(Date.now() - 86400000).toISOString();
-  const [investments, devices, readings24, latest] = await Promise.all([
+  const [investments, devices, readings24] = await Promise.all([
     q(sb.from('investments').select('id, name, latitude, longitude').order('created_at', { ascending: false })),
     q(sb.from('devices').select('id, name, product_type, last_seen, investment_id')),
     q(sb.from('readings').select('id', { count: 'exact', head: true }).gte('created_at', since)),
-    q(sb.from('readings').select('created_at, data, device_id').order('created_at', { ascending: false }).limit(8)),
   ]);
   const connected = devices.filter((d) => typeOf(d.product_type).connected);
   const online = connected.filter((d) => isOnline(d.last_seen));
   const invById = Object.fromEntries(investments.map((i) => [i.id, i]));
-  const devById = Object.fromEntries(devices.map((d) => [d.id, d]));
   const offline = connected.filter((d) => !isOnline(d.last_seen));
 
   root.innerHTML = `
-    ${topbar('Pulpit', 'Przegląd wszystkich inwestycji', `<a class="btn primary" data-admin href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`)}
+    ${topbar('Euroasfalt inteligentne rozwiązania dla miast', 'Przegląd wszystkich inwestycji', `<a class="btn primary" data-admin href="#/inwestycje?nowa=1">${icon('plus', 16)} Nowa inwestycja</a>`, { center: true })}
     <section class="stats fade-in">
       <div class="stat glass"><div class="label">${icon('road', 16)} Inwestycje</div><div class="value">${investments.length}</div></div>
       <div class="stat glass"><div class="label">${icon('chip', 16)} Urządzenia</div><div class="value">${devices.length}</div></div>
       <div class="stat glass"><div class="label">${icon('wifi', 16)} Online</div><div class="value">${online.length}<span style="font-size:16px;color:var(--muted)"> / ${connected.length}</span></div></div>
       <div class="stat glass"><div class="label">${icon('chart', 16)} Odczyty (24 h)</div><div class="value">${readings24}</div></div>
     </section>
-    <section class="grid-2">
+    <section class="${offline.length ? 'grid-2' : ''}">
       <div class="panel glass">
         <h2>Mapa inwestycji</h2>
         <p class="hint">Kliknij pinezkę, aby otworzyć inwestycję.</p>
         <div class="map small" id="dash-map"></div>
       </div>
-      <div class="panel glass">
-        <h2>Ostatnie odczyty</h2>
-        <p class="hint">Najnowsze dane przesłane przez sterowniki.</p>
-        <div class="list">
-          ${latest.length ? latest.map((r) => {
-            const d = devById[r.device_id] || {};
-            const inv = invById[d.investment_id] || {};
-            const ms = metricsOf(d.product_type);
-            const vals = Object.entries(r.data || {}).map(([k, v]) => {
-              const m = ms.find((x) => x.key === k);
-              return `${esc(m?.label || k)}: <b>${esc(fmtValue(m, v))}${m?.unit ? ` ${esc(m.unit)}` : ''}</b>`;
-            }).join(' · ');
-            return `<a class="row" href="#/inwestycja/${inv.id}/odczyty" style="text-decoration:none;color:inherit">
-              <div class="grow"><div class="title">${esc(inv.name || '—')} · ${esc(d.name || typeOf(d.product_type).name)}</div>
-              <div class="sub">${vals}</div></div>
-              <span class="sub">${esc(ago(r.created_at))}</span></a>`;
-          }).join('') : '<div class="empty">Brak odczytów. Pojawią się, gdy sterownik wyśle pierwsze dane.</div>'}
-        </div>
-        ${offline.length ? `<h2 style="margin-top:20px">Urządzenia offline</h2><p class="hint">Brak kontaktu dłużej niż ${ONLINE_MINUTES} min.</p>
-          <div class="list">${offline.slice(0, 6).map((d) => `
-            <a class="row" href="#/inwestycja/${d.investment_id}" style="text-decoration:none;color:inherit">
-              <div class="grow"><div class="title">${esc(d.name || typeOf(d.product_type).name)}</div>
-              <div class="sub">${esc(invById[d.investment_id]?.name || '')}</div></div>
-              <span class="status off">${esc(ago(d.last_seen))}</span></a>`).join('')}</div>` : ''}
-      </div>
+      ${offline.length ? `<div class="panel glass">
+        <h2>Urządzenia offline</h2><p class="hint">Brak kontaktu dłużej niż ${ONLINE_MINUTES} min.</p>
+        <div class="list">${offline.slice(0, 8).map((d) => `
+          <a class="row" href="#/inwestycja/${d.investment_id}" style="text-decoration:none;color:inherit">
+            <div class="grow"><div class="title">${esc(d.name || typeOf(d.product_type).name)}</div>
+            <div class="sub">${esc(invById[d.investment_id]?.name || '')}</div></div>
+            <span class="status off">${esc(ago(d.last_seen))}</span></a>`).join('')}</div>
+      </div>` : ''}
     </section>`;
   bindTopbar(root);
   drawInvestmentPins(makeMap(root.querySelector('#dash-map'), { scroll: false }), investments);
