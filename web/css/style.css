@@ -302,6 +302,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .tbl th, .tbl td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .tbl th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
 .tbl tr:hover td { background: rgba(255,255,255,0.03); }
+.tbl tr.day-row td { color: var(--accent); font-weight: 600; padding-top: 16px; background: none; }
 
 /* ───────── Galeria ───────── */
 /* ───────── Galeria: karuzela 3D ───────── */
