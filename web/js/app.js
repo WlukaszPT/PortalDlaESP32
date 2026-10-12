@@ -1083,7 +1083,9 @@ async function tabReadings(el, inv, mode) {
         ...(pts.length && xMax - pts.at(-1).at > gapInfo.limit ? [[+pts.at(-1).at, xMax]] : []),
       ];
       anyGap ||= gapAreas.length > 0 || pts.some((p) => p.gap);
-      const gapTop = m.key === 'battery_voltage' ? 15 : Math.max(1, ...pts.map((p) => p.value ?? 0));
+      // Szary słupek ma wysokość najniższego słupka z danymi (pomijamy zera, bo byłby niewidoczny).
+      const shown = pts.filter((p) => !p.gap && p.value != null && p.value > 0).map((p) => p.value);
+      const gapTop = shown.length ? Math.min(...shown) : 1;
       const span = pts.length > 1 ? pts.at(-1).at - pts[0].at : 0;
       const multiDay = cat ? span > 86400000 : xMax - xMin > 86400000 + 60000;
       const tick = (t) => t.toLocaleString('pl-PL', multiDay
@@ -1114,7 +1116,8 @@ async function tabReadings(el, inv, mode) {
             g.save(); g.fillStyle = GAP_COLOR;
             for (const [a, b] of gapAreas) {
               const l = Math.max(area.left, x.getPixelForValue(a)), r = Math.min(area.right, x.getPixelForValue(b));
-              if (r > l) g.fillRect(l, area.top, r - l, area.bottom - area.top);
+              const top = Math.max(area.top, Math.min(area.bottom, c.scales.y.getPixelForValue(gapTop)));
+              if (r > l) g.fillRect(l, top, r - l, area.bottom - top);
             }
             g.restore();
           },
