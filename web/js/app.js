@@ -1071,7 +1071,12 @@ async function tabReadings(el, inv, mode) {
                 },
                 grid: { color: 'rgba(255,255,255,0.04)' },
               },
-            y: { ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' }, beginAtZero: m.value_type === 'integer' || (hourly && COUNTER_KEYS.includes(m.key)) },
+            y: {
+              ticks: { color: '#8a8f99' }, grid: { color: 'rgba(255,255,255,0.07)' },
+              beginAtZero: m.value_type === 'integer' || (hourly && COUNTER_KEYS.includes(m.key)),
+              // Napięcie zawsze w tej samej skali, żeby wykresy dało się porównywać.
+              ...(m.key === 'battery_voltage' ? { min: 10, max: 15 } : {}),
+            },
           },
         },
       }));
