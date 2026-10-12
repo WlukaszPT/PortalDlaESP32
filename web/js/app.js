@@ -963,7 +963,22 @@ function hourlySeries(pts, key, from, to) {
     }
   }
   return [...buckets.values()].sort((a, b) => a.start - b.start)
-    .map((b) => ({ start: b.start, value: counter ? b.inc : b.n ? Math.round((b.sum / b.n) * 100) / 100 : null }));
+    .map((b) => ({ start: b.start, n: b.n, value: counter ? b.inc : b.n ? Math.round((b.sum / b.n) * 100) / 100 : null }));
+}
+
+const GAP_COLOR = 'rgba(205,210,218,0.32)';
+const fmtSpan = (ms) => {
+  const min = Math.round(ms / 60000);
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = min % 60;
+  return [d && `${d} d`, h && `${h} h`, (m || (!d && !h)) && `${m} min`].filter(Boolean).join(' ');
+};
+
+// Przerwy w danych: odstęp między odczytami dłuższy niż 3 typowe odstępy (i co najmniej 2 minuty).
+function findGaps(times) {
+  const steps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+  const typical = steps[Math.floor(steps.length / 2)] || 0;
+  const limit = Math.max(3 * typical, 120000);
+  return { limit, gaps: times.slice(1).map((t, i) => [times[i], t]).filter(([a, b]) => b - a > limit) };
 }
 
 async function tabReadings(el, inv, mode) {
@@ -1035,6 +1050,7 @@ async function tabReadings(el, inv, mode) {
     body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}${suffix(m)}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>
       ${total > current.length ? `<p class="hint" style="margin-top:10px">W tym okresie jest ${total} odczytów. Wykres pokazuje ${current.length} z nich, równo rozłożonych w czasie.</p>` : ''}`;
 
+    let anyGap = false;
     numeric.forEach((m) => {
       const raw = current.filter((r) => typeof r.data?.[m.key] === 'number');
       // Wspólna postać dla obu typów: czas słupka, wartość i opis w dymku.
@@ -1042,9 +1058,17 @@ async function tabReadings(el, inv, mode) {
         ? hourlySeries(raw, m.key, fromH ? Date.now() - fromH * 3600000 : null, Date.now() - toH * 3600000 - (toH ? 1 : 0)).map((h) => {
           const end = new Date(+h.start + 3600000);
           const hm = (t) => t.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
-          return { at: h.start, value: h.value, title: `${h.start.toLocaleDateString('pl-PL')} ${hm(h.start)}–${hm(end)}` };
+          return { at: h.start, value: h.value, gap: !h.n, title: `${h.start.toLocaleDateString('pl-PL')} ${hm(h.start)}–${hm(end)}` };
         })
         : raw.map((r) => ({ at: new Date(r.created_at), value: r.data[m.key], title: fmtDate(r.created_at) }));
+      // Przerwy w danych pokazujemy jasnoszarymi słupkami (na osi czasu: szarym polem).
+      const gapInfo = hourly ? null : findGaps(pts.map((p) => +p.at));
+      if (lim && gapInfo.gaps.length) {
+        for (const [a, b] of [...gapInfo.gaps].reverse()) {
+          const i = pts.findIndex((p) => +p.at === b);
+          pts.splice(i, 0, { at: new Date(a), gap: true, value: null, title: `Brak danych: ${fmtDate(a)} – ${fmtDate(b)} (${fmtSpan(b - a)})` });
+        }
+      }
       const ctx = body.querySelector(`[data-chart="${CSS.escape(m.key)}"]`);
       // Wykres rzeczywisty ma prawdziwą oś czasu: pełne godziny zakresu, a przerwy w danych zostają puste.
       const xMin = fromH ? Date.now() - fromH * 3600000 : +(pts[0]?.at ?? Date.now());
@@ -1052,6 +1076,14 @@ async function tabReadings(el, inv, mode) {
       // Na osi same godziny; przy zakresie dłuższym niż doba dodajemy dzień, żeby godziny się nie myliły.
       // Przy „ostatnich N odczytach” słupki stoją obok siebie (oś kategorii), bo mogą dzielić je sekundy albo dni.
       const cat = hourly || !!lim;
+      // Pola bez danych na osi czasu, także przed pierwszym i po ostatnim odczycie w zakresie.
+      const gapAreas = cat ? [] : [
+        ...(pts.length && pts[0].at - xMin > gapInfo.limit ? [[xMin, +pts[0].at]] : []),
+        ...gapInfo.gaps,
+        ...(pts.length && xMax - pts.at(-1).at > gapInfo.limit ? [[+pts.at(-1).at, xMax]] : []),
+      ];
+      anyGap ||= gapAreas.length > 0 || pts.some((p) => p.gap);
+      const gapTop = m.key === 'battery_voltage' ? 15 : Math.max(1, ...pts.map((p) => p.value ?? 0));
       const span = pts.length > 1 ? pts.at(-1).at - pts[0].at : 0;
       const multiDay = cat ? span > 86400000 : xMax - xMin > 86400000 + 60000;
       const tick = (t) => t.toLocaleString('pl-PL', multiDay
@@ -1060,16 +1092,33 @@ async function tabReadings(el, inv, mode) {
       charts.push(new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: cat ? pts.map((p) => tick(p.at)) : undefined,
+          labels: cat ? pts.map((p) => (p.gap && !hourly ? 'brak' : tick(p.at))) : undefined,
           datasets: [{
             // Najpierw słupki na dole osi; prawdziwe wartości wstawiamy, gdy układ strony się ustali (niżej).
             label: m.label, data: cat ? pts.map(() => null) : pts.map((p) => ({ x: +p.at, y: null })),
             backgroundColor: 'rgba(0,255,255,0.55)', hoverBackgroundColor: '#00ffff',
             borderColor: '#00ffff', borderWidth: { top: 2, left: 0, right: 0, bottom: 0 },
             borderRadius: { topLeft: 3, topRight: 3 }, borderSkipped: 'bottom',
-            categoryPercentage: 0.9, barPercentage: 0.85,
-          }],
+            categoryPercentage: 0.9, barPercentage: 0.85, grouped: false, order: 1,
+          }, ...(cat ? [{
+            label: 'Brak danych', data: pts.map(() => null), backgroundColor: GAP_COLOR, hoverBackgroundColor: 'rgba(205,210,218,0.5)',
+            borderRadius: { topLeft: 3, topRight: 3 }, borderSkipped: 'bottom',
+            categoryPercentage: 0.9, barPercentage: 0.85, grouped: false, order: 2,
+          }] : [])],
         },
+        plugins: [{
+          id: 'gapAreas',
+          beforeDatasetsDraw: (c) => {
+            if (!gapAreas.length) return;
+            const { ctx: g, chartArea: area, scales: { x } } = c;
+            g.save(); g.fillStyle = GAP_COLOR;
+            for (const [a, b] of gapAreas) {
+              const l = Math.max(area.left, x.getPixelForValue(a)), r = Math.min(area.right, x.getPixelForValue(b));
+              if (r > l) g.fillRect(l, area.top, r - l, area.bottom - area.top);
+            }
+            g.restore();
+          },
+        }],
         options: {
           responsive: true, maintainAspectRatio: false,
           // Słupki rosną od zera do wartości przez 3 sekundy po wejściu na wykresy.
@@ -1078,7 +1127,7 @@ async function tabReadings(el, inv, mode) {
             legend: { display: false },
             tooltip: { callbacks: {
               title: (items) => pts[items[0].dataIndex].title,
-              label: (c) => `${fmtValue(m, c.parsed.y)}${m.unit ? ` ${m.unit}` : ''}`,
+              label: (c) => (c.datasetIndex === 1 ? 'Brak danych' : `${fmtValue(m, c.parsed.y)}${m.unit ? ` ${m.unit}` : ''}`),
             } },
           },
           scales: {
@@ -1109,7 +1158,10 @@ async function tabReadings(el, inv, mode) {
       setTimeout(() => {
         if (!chart.canvas?.isConnected) return;
         const ds = chart.data.datasets[0];
-        if (cat) ds.data = pts.map((p) => p.value);
+        if (cat) {
+          ds.data = pts.map((p) => (p.gap && !hourly ? null : p.value));
+          chart.data.datasets[1].data = pts.map((p) => (p.gap ? gapTop : null));
+        }
         else {
           ds.data = pts.map((p) => ({ x: +p.at, y: p.value }));
           // Szerokość słupka z typowego odstępu między odczytami, żeby gęste dane nie zlewały się w jedną plamę.
@@ -1121,6 +1173,7 @@ async function tabReadings(el, inv, mode) {
         chart.update();
       }, 150);
     });
+    if (anyGap) body.querySelector('.charts').insertAdjacentHTML('afterend', `<p class="hint" style="margin-top:10px"><span class="gap-swatch"></span> Jasnoszare słupki i pola oznaczają brak danych z urządzenia w tym czasie.</p>`);
   };
 
   el.querySelector('#r-csv').onclick = () => {
