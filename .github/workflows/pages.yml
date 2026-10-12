@@ -25,6 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # Numer wersji w adresach plików, żeby przeglądarka nie trzymała starego app.js po aktualizacji.
+      - name: Wersja plików
+        run: |
+          V="${GITHUB_SHA::8}"
+          sed -i "s#css/style.css\"#css/style.css?v=$V\"#; s#js/app.js\"#js/app.js?v=$V\"#" web/index.html
+          sed -i "s#'./config.js'#'./config.js?v=$V'#; s#'./icons.js'#'./icons.js?v=$V'#" web/js/app.js
+          grep -n "?v=" web/index.html web/js/app.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
