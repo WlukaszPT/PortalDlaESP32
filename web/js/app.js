@@ -11,6 +11,8 @@ const state = {
   productTypes: [],
   productMetrics: [],
   profile: null, // { role: 'admin' | 'user', full_name, email }
+  isOwner: false, // właściciel portalu: jako jedyny widzi historię wejść
+  visitLogged: null, // dla kogo zapisano już wejście w tej karcie przeglądarki
   collapsed: readPref('sidebar-collapsed') === '1',
   cleanups: [],
 };
@@ -330,6 +332,24 @@ async function loadDictionaries() {
   state.productMetrics = metrics;
 }
 
+// Jedno wejście na stronę = jeden wpis w historii (odświeżenie strony to nowe wejście).
+function logVisit() {
+  const uid = state.session.user.id;
+  if (state.visitLogged === uid) return;
+  state.visitLogged = uid;
+  sb.rpc('log_visit', { p_device: deviceName() }).then(() => {}, () => {});
+}
+
+// Krótki opis przeglądarki i systemu, np. „Chrome · Windows”.
+function deviceName() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Przeglądarka';
+  const os = /Android/.test(ua) ? 'Android' : /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad'
+    : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} · ${os}` : browser;
+}
+
 async function route() {
   if (!state.session) { renderLogin(); return; }
   const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').map(decodeURIComponent);
@@ -343,7 +363,9 @@ async function route() {
     } catch { /* starsza baza bez ról */ }
     // Brak profilu traktujemy jak konto niezatwierdzone (baza i tak nie pokaże mu danych).
     state.profile ||= { role: 'pending', email: state.session.user.email };
+    state.isOwner = await sb.rpc('is_owner').then(({ data }) => data === true, () => false);
   }
+  logVisit();
   if (state.profile.role === 'pending') { renderPending(); return; }
   document.body.classList.toggle('role-user', !isAdmin());
   ensureShell();
@@ -356,6 +378,7 @@ async function route() {
   try {
     if (page === 'inwestycje') await pageInvestments(content);
     else if (page === 'mapa') await pageMap(content);
+    else if (page === 'uzytkownicy' && id === 'historia' && state.isOwner) await pageVisits(content);
     else if (page === 'uzytkownicy' && isAdmin()) await pageUsers(content);
     else if (page === 'hurtownia') await pageWarehouse(content);
     else if (page === 'inwestycja' && id) await pageInvestment(content, id, tab);
@@ -1711,6 +1734,7 @@ async function pageUsers(root) {
 
   root.innerHTML = `
     ${topbar('Użytkownicy', `${users.length} ${users.length === 1 ? 'konto' : 'kont'} w bazie`, `<button class="btn primary" type="button" data-add>${icon('plus', 16)} Dodaj użytkownika</button>`)}
+    ${usersTabs('konta')}
     ${users.some((u) => u.role === 'pending') ? group('pending', 'Oczekujące na zatwierdzenie', 'Osoby, które same założyły konto. Do czasu zatwierdzenia nie widzą żadnych danych. Zatwierdź (rola Użytkownik) albo usuń konto.') : ''}
     ${group('admin', 'Administratorzy', 'Pełny dostęp: inwestycje, urządzenia, wysyłanie danych do ESP32, usuwanie, zarządzanie użytkownikami.')}
     ${group('user', 'Użytkownicy', 'Podgląd wszystkiego oraz dodawanie wpisów serwisowych, zdjęć i dokumentów. Bez edycji inwestycji, urządzeń i usuwania.')}`;
@@ -1770,6 +1794,58 @@ async function pageUsers(root) {
       try { await usersApi({ action: 'delete', user_id: u.user_id }); toast('Konto usunięte.', 'ok'); refreshPendingBadge(); pageUsers(root); } catch (err) { fail(err); }
     });
   });
+}
+
+// Zakładki strony Użytkownicy. Historię wejść widzi tylko właściciel portalu.
+function usersTabs(active) {
+  if (!state.isOwner) return '';
+  return `<nav class="tabs glass" style="border-radius:999px">
+    <a class="tab ${active === 'konta' ? 'active' : ''}" href="#/uzytkownicy">${icon('users', 16)} Konta</a>
+    <a class="tab ${active === 'historia' ? 'active' : ''}" href="#/uzytkownicy/historia">${icon('clock', 16)} Historia wejść</a>
+  </nav>`;
+}
+
+async function pageVisits(root) {
+  document.title = 'Historia wejść · CloudEA';
+  const visits = await q(sb.rpc('visit_log', { p_limit: 1000 }));
+  const people = [...new Map(visits.map((v) => [v.user_id, v.full_name || v.email || 'Usunięte konto'])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], 'pl'));
+  const day = (d) => { const t = new Date(d).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); return t[0].toUpperCase() + t.slice(1); };
+  const time = (d) => new Date(d).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  root.innerHTML = `
+    ${topbar('Użytkownicy', 'Historia wejść na stronę, widoczna tylko dla Ciebie')}
+    ${usersTabs('historia')}
+    <section class="panel glass">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+        <label class="lbl" style="min-width:240px">Osoba<select class="inp" id="v-user">
+          <option value="">Wszyscy</option>
+          ${people.map(([uid, name]) => `<option value="${esc(uid)}">${esc(name)}</option>`).join('')}
+        </select></label>
+      </div>
+      <div id="v-body"></div>
+      <p class="hint" style="margin-top:10px">Każde otwarcie lub odświeżenie strony przez zalogowaną osobę to jeden wpis. Pokazano do 1000 najnowszych, wpisy starsze niż rok są usuwane.</p>
+    </section>`;
+  bindTopbar(root);
+
+  const body = root.querySelector('#v-body');
+  const draw = () => {
+    const uid = root.querySelector('#v-user').value;
+    const list = uid ? visits.filter((v) => v.user_id === uid) : visits;
+    if (!list.length) { body.innerHTML = '<div class="empty">Brak wejść.</div>'; return; }
+    let last = '';
+    body.innerHTML = `<div class="table-wrap"><table class="tbl">
+      <thead><tr><th>Godzina</th><th>Osoba</th><th>Urządzenie</th></tr></thead>
+      <tbody>${list.map((v) => {
+        const d = day(v.visited_at);
+        const head = d !== last ? `<tr class="day-row"><td colspan="3">${esc(d)}</td></tr>` : '';
+        last = d;
+        return `${head}<tr><td>${esc(time(v.visited_at))}</td><td>${esc(v.full_name || v.email || 'Usunięte konto')}${v.full_name && v.email ? ` <span style="color:var(--muted)">· ${esc(v.email)}</span>` : ''}</td><td>${esc(v.device || '')}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  };
+  root.querySelector('#v-user').onchange = draw;
+  draw();
 }
 
 if (window.Chart) {

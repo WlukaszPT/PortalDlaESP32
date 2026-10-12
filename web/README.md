@@ -27,6 +27,7 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 - **Hurtownia danych** – ile miejsca zajmuje baza (limit 500 MB) i pliki (limit 1 GB) w darmowym planie, % wolnego miejsca, co zajmuje najwięcej i na jak długo wystarczy miejsca przy obecnym tempie odczytów. Dane z funkcji `storage_stats()`.
 - **Rejestracja** – link „Zarejestruj się” w panelu logowania; nowe konto widzi tylko ekran „Konto czeka na zatwierdzenie”.
 - **Użytkownicy** (tylko administrator) – lista kont z podziałem na oczekujące (przycisk Zatwierdź), administratorów i użytkowników, zmiana roli, dodawanie, reset hasła, usuwanie.
+  Zakładka **Historia wejść** (widzi ją tylko właściciel portalu, czyli pierwsze konto w bazie; inni administratorzy nie) pokazuje, kto i o której otwierał stronę oraz z jakiej przeglądarki.
 
 ## Role
 
