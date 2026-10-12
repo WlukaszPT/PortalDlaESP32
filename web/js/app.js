@@ -979,7 +979,8 @@ async function tabReadings(el, inv, mode) {
     try {
       if (mode !== 'table' && !lim) {
         // Wykresy: odczyty z całego okresu (przy dużej liczbie co n-ty), a nie tylko 1000 najnowszych.
-        current = await q(sb.rpc('readings_sample', { p_device_id: d.id, p_from: from, p_to: to, p_max: 2000 }));
+        // Supabase oddaje najwyżej 1000 wierszy, dlatego prosimy o 900 punktów (plus zawsze ostatni odczyt).
+        current = await q(sb.rpc('readings_sample', { p_device_id: d.id, p_from: from, p_to: to, p_max: 900 }));
         total = current[0]?.total || 0;
       } else {
         let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(lim || 1000);
