@@ -524,3 +524,4 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .pending-card h1 { font-size: 26px; margin: 18px 0 8px; }
 .pending-card .sub { color: var(--muted); margin: 0 0 24px; line-height: 1.6; }
 .pending-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.gap-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: rgba(205,210,218,0.32); vertical-align: -1px; margin-right: 4px; }
