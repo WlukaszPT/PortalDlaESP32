@@ -973,10 +973,21 @@ async function tabReadings(el, inv, mode) {
     charts.forEach((c) => c.destroy()); charts = [];
     const d = devices.find((x) => x.id === devSel.value);
     const [, , fromH, toH, lim] = RANGES.find(([k]) => k === rangeSel.value);
-    let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(lim || 1000);
-    if (fromH) query = query.gte('created_at', new Date(Date.now() - fromH * 3600000).toISOString());
-    if (toH) query = query.lt('created_at', new Date(Date.now() - toH * 3600000).toISOString());
-    try { current = (await q(query)).reverse(); } catch (e) { fail(e); return; }
+    const from = fromH ? new Date(Date.now() - fromH * 3600000).toISOString() : null;
+    const to = toH ? new Date(Date.now() - toH * 3600000).toISOString() : null;
+    let total = 0;
+    try {
+      if (mode !== 'table' && !lim) {
+        // Wykresy: odczyty z całego okresu (przy dużej liczbie co n-ty), a nie tylko 1000 najnowszych.
+        current = await q(sb.rpc('readings_sample', { p_device_id: d.id, p_from: from, p_to: to, p_max: 2000 }));
+        total = current[0]?.total || 0;
+      } else {
+        let query = sb.from('readings').select('created_at, data').eq('device_id', d.id).order('created_at', { ascending: false }).limit(lim || 1000);
+        if (from) query = query.gte('created_at', from);
+        if (to) query = query.lt('created_at', to);
+        current = (await q(query)).reverse();
+      }
+    } catch (e) { fail(e); return; }
     const ms = metricsOf(d.product_type);
     const keys = [...new Set(current.flatMap((r) => Object.keys(r.data || {})))];
     const cols = [...ms.filter((m) => keys.includes(m.key)), ...keys.filter((k) => !ms.some((m) => m.key === k)).map((k) => ({ key: k, label: k, value_type: 'text' }))];
@@ -995,7 +1006,8 @@ async function tabReadings(el, inv, mode) {
     if (!numeric.length) { body.innerHTML = '<div class="empty">To urządzenie nie wysyła danych liczbowych. Zobacz zakładkę Dane rzeczywiste.</div>'; return; }
     const hourly = typeSel?.value === 'hourly';
     const suffix = (m) => (!hourly ? '' : COUNTER_KEYS.includes(m.key) ? ' · na godzinę' : ' · średnia godzinowa');
-    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}${suffix(m)}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>`;
+    body.innerHTML = `<div class="charts">${numeric.map((m) => `<div class="chart-box glass"><h4>${esc(m.label)}${m.unit ? ` [${esc(m.unit)}]` : ''}${suffix(m)}</h4><div class="cv"><canvas data-chart="${esc(m.key)}"></canvas></div></div>`).join('')}</div>
+      ${total > current.length ? `<p class="hint" style="margin-top:10px">W tym okresie jest ${total} odczytów. Wykres pokazuje ${current.length} z nich, równo rozłożonych w czasie.</p>` : ''}`;
 
     numeric.forEach((m) => {
       const raw = current.filter((r) => typeof r.data?.[m.key] === 'number');
