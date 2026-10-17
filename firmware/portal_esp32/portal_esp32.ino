@@ -6,7 +6,9 @@
 //  - o północy (czas polski z internetu) counter wraca do zera,
 //  - counter jest zapisywany w pamięci flash, więc po restarcie liczy dalej od tej samej wartości,
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
-//    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s.
+//    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s,
+//  - co 30 s pobiera „Wiadomość serwera” (zakładka na stronie); po dotknięciu palcem pinu
+//    dotykowego T0 (GPIO4, opisany na płytce D4) wypisuje ją w monitorze portu szeregowego.
 //
 // Wymagane biblioteki: ArduinoJson (Menedżer bibliotek, wersja 7.x).
 // Przed kompilacją skopiuj secrets.example.h jako secrets.h i uzupełnij dane.
@@ -23,9 +25,12 @@
 #include "root_ca.h"
 
 const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
+const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy dotknąć go palcem lub kablem
 
 const unsigned long READING_INTERVAL_MS = 20000;  // wysyłanie odczytu
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
+const unsigned long MESSAGE_INTERVAL_MS = 30000;  // pobieranie wiadomości serwera
+const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
 const float LED_ON_S = 10.0;  // świecenie diody po poleceniu ze strony
 
 // Czas polski (zimą CET, latem CEST) z serwerów NTP.
@@ -48,6 +53,15 @@ bool  tornOn = false;
 
 unsigned long lastReading = 0;
 unsigned long lastCommandCheck = 0;
+unsigned long lastMessageCheck = 0;
+
+String serverMessage = "";        // ostatnia wiadomość pobrana z bazy
+bool   messageLoaded = false;     // czy udało się już ją pobrać
+uint16_t touchThreshold = 0;      // poniżej tej wartości touchRead() uznajemy pin za dotknięty
+// Przerwanie od pinu dotykowego zaznacza dotyk także wtedy, gdy loop() czeka na bazę.
+volatile bool touchFlag = false;
+bool touchHeld = false;           // palec wciąż na pinie: nie wypisujemy drugi raz
+unsigned long touchChangedAt = 0;
 WiFiClientSecure tls;
 // Timer gasi diodę po 10 s, także wtedy, gdy ESP32 czeka na odpowiedź bazy.
 Ticker ledOffTicker;
@@ -205,6 +219,85 @@ void checkCommands() {
   }
 }
 
+// ───────────── Wiadomość serwera ─────────────
+
+void fetchMessage() {
+  JsonDocument body;
+  body["p_key"] = DEVICE_KEY;
+
+  String response;
+  int code = callRpc("device_get_message", body, response);
+  if (code != 200) {
+    Serial.printf("Wiadomość serwera: HTTP %d %s\n", code, response.c_str());
+    return;
+  }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, response)) {
+    Serial.println("Wiadomość serwera: niepoprawny JSON");
+    return;
+  }
+  String message = doc["message"] | "";
+  if (!messageLoaded || message != serverMessage) {
+    Serial.printf("Wiadomość serwera pobrana: \"%s\"\n", message.c_str());
+  }
+  serverMessage = message;
+  messageLoaded = true;
+}
+
+void printMessage() {
+  if (!messageLoaded) {
+    Serial.println(">>> Dotyk: wiadomość serwera jeszcze nie została pobrana");
+  } else if (serverMessage.length() == 0) {
+    Serial.println(">>> Dotyk: brak wiadomości serwera");
+  } else {
+    Serial.printf(">>> Wiadomość serwera: %s\n", serverMessage.c_str());
+  }
+}
+
+void IRAM_ATTR onTouch() {
+  touchFlag = true;
+}
+
+// Mierzy pin, gdy nikt go nie dotyka (przy starcie), i ustawia próg na 2/3 tej wartości.
+void calibrateTouch() {
+  uint32_t sum = 0;
+  for (int i = 0; i < 16; i++) {
+    sum += touchRead(TOUCH_PIN);
+    delay(10);
+  }
+  uint16_t base = sum / 16;
+  touchThreshold = base * 2 / 3;
+  Serial.printf("Pin dotykowy GPIO4: spoczynek %u, próg %u\n", base, touchThreshold);
+  touchAttachInterrupt(TOUCH_PIN, onTouch, touchThreshold);
+}
+
+// Jeden dotyk = jedna wiadomość. Kolejna dopiero po zabraniu palca (z odczekaniem debounce).
+void checkTouch() {
+  bool touched = touchRead(TOUCH_PIN) < touchThreshold;
+  unsigned long now = millis();
+
+  if (!touchHeld && (touchFlag || touched)) {
+    if (touchChangedAt == 0) touchChangedAt = now;
+    // Krótki dotyk w trakcie zapytania do bazy złapało przerwanie, więc liczy się od razu.
+    if (touchFlag && !touched) touchChangedAt = now - TOUCH_DEBOUNCE_MS;
+    if (now - touchChangedAt >= TOUCH_DEBOUNCE_MS) {
+      touchHeld = true;
+      touchChangedAt = 0;
+      printMessage();
+    }
+  } else if (touchHeld && !touched) {
+    if (touchChangedAt == 0) touchChangedAt = now;
+    if (now - touchChangedAt >= TOUCH_DEBOUNCE_MS) {
+      touchHeld = false;
+      touchChangedAt = 0;
+    }
+  } else {
+    touchChangedAt = 0;
+  }
+  touchFlag = false;
+}
+
 // ───────────── Dioda ─────────────
 
 void turnOffLed() {
@@ -229,12 +322,15 @@ void setup() {
   randomSeed(esp_random());
   loadCounter();
 
+  calibrateTouch();  // nie dotykaj pinu GPIO4 podczas startu
+
   tls.setCACert(ROOT_CA);
   connectWiFi();
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 }
 
 void loop() {
+  checkTouch();
   connectWiFi();
   unsigned long now = millis();
 
@@ -246,6 +342,11 @@ void loop() {
     lastCommandCheck = now;
     checkCommands();
   }
+  if (now - lastMessageCheck >= MESSAGE_INTERVAL_MS || lastMessageCheck == 0) {
+    lastMessageCheck = now;
+    fetchMessage();
+  }
+  checkTouch();
 
   delay(50);
 }
