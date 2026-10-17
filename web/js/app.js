@@ -1542,7 +1542,7 @@ function tabMessage(el, inv) {
   el.innerHTML = `
     <div class="panel glass">
       <h2>Wiadomość serwera</h2>
-      <p class="hint">Urządzenia ESP32 tej inwestycji pobierają tę wiadomość co 30 s. Po dotknięciu palcem pinu dotykowego (GPIO4) wypisują ją w monitorze portu szeregowego.</p>
+      <p class="hint">Po dotknięciu palcem pinu dotykowego D4 (GPIO4) urządzenie ESP32 tej inwestycji pobiera tę wiadomość z serwera i wypisuje ją w monitorze portu szeregowego.</p>
       <form id="msg-form" class="list">
         <label class="lbl">Treść wiadomości
           <textarea class="inp" name="message" maxlength="500" placeholder="np. Zachowaj ostrożność" style="min-height:110px;resize:vertical" ${admin ? '' : 'readonly'}>${esc(msg)}</textarea></label>

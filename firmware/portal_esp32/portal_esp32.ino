@@ -7,8 +7,9 @@
 //  - counter jest zapisywany w pamięci flash, więc po restarcie liczy dalej od tej samej wartości,
 //  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
 //    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s,
-//  - co 30 s pobiera „Wiadomość serwera” (zakładka na stronie); po dotknięciu palcem pinu
-//    dotykowego T0 (GPIO4, opisany na płytce D4) wypisuje ją w monitorze portu szeregowego.
+//  - po dotknięciu palcem pinu dotykowego T0 (GPIO4, opisany na płytce D4) pobiera z bazy
+//    „Wiadomość serwera” (zakładka na stronie) i wypisuje ją w monitorze portu szeregowego;
+//    wiadomość nie jest przechowywana w pamięci ESP32, przy każdym dotyku pobierana jest od nowa.
 //
 // Wymagane biblioteki: ArduinoJson (Menedżer bibliotek, wersja 7.x).
 // Przed kompilacją skopiuj secrets.example.h jako secrets.h i uzupełnij dane.
@@ -29,7 +30,6 @@ const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy
 
 const unsigned long READING_INTERVAL_MS = 20000;  // wysyłanie odczytu
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
-const unsigned long MESSAGE_INTERVAL_MS = 30000;  // pobieranie wiadomości serwera
 const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
 const float LED_ON_S = 10.0;  // świecenie diody po poleceniu ze strony
 
@@ -53,10 +53,7 @@ bool  tornOn = false;
 
 unsigned long lastReading = 0;
 unsigned long lastCommandCheck = 0;
-unsigned long lastMessageCheck = 0;
 
-String serverMessage = "";        // ostatnia wiadomość pobrana z bazy
-bool   messageLoaded = false;     // czy udało się już ją pobrać
 uint16_t touchThreshold = 0;      // poniżej tej wartości touchRead() uznajemy pin za dotknięty
 // Przerwanie od pinu dotykowego zaznacza dotyk także wtedy, gdy loop() czeka na bazę.
 volatile bool touchFlag = false;
@@ -221,37 +218,29 @@ void checkCommands() {
 
 // ───────────── Wiadomość serwera ─────────────
 
-void fetchMessage() {
+// Wywoływane po dotknięciu pinu: pobiera aktualną wiadomość z bazy i od razu ją wypisuje.
+void showServerMessage() {
+  Serial.println(">>> Dotyk: pobieram wiadomość serwera...");
   JsonDocument body;
   body["p_key"] = DEVICE_KEY;
 
   String response;
   int code = callRpc("device_get_message", body, response);
   if (code != 200) {
-    Serial.printf("Wiadomość serwera: HTTP %d %s\n", code, response.c_str());
+    Serial.printf(">>> Nie udało się pobrać wiadomości: HTTP %d %s\n", code, response.c_str());
     return;
   }
 
   JsonDocument doc;
   if (deserializeJson(doc, response)) {
-    Serial.println("Wiadomość serwera: niepoprawny JSON");
+    Serial.println(">>> Nie udało się pobrać wiadomości: niepoprawny JSON");
     return;
   }
-  String message = doc["message"] | "";
-  if (!messageLoaded || message != serverMessage) {
-    Serial.printf("Wiadomość serwera pobrana: \"%s\"\n", message.c_str());
-  }
-  serverMessage = message;
-  messageLoaded = true;
-}
-
-void printMessage() {
-  if (!messageLoaded) {
-    Serial.println(">>> Dotyk: wiadomość serwera jeszcze nie została pobrana");
-  } else if (serverMessage.length() == 0) {
-    Serial.println(">>> Dotyk: brak wiadomości serwera");
+  const char* message = doc["message"] | "";
+  if (message[0] == '\0') {
+    Serial.println(">>> Brak wiadomości serwera");
   } else {
-    Serial.printf(">>> Wiadomość serwera: %s\n", serverMessage.c_str());
+    Serial.printf(">>> Wiadomość serwera: %s\n", message);
   }
 }
 
@@ -284,7 +273,7 @@ void checkTouch() {
     if (now - touchChangedAt >= TOUCH_DEBOUNCE_MS) {
       touchHeld = true;
       touchChangedAt = 0;
-      printMessage();
+      showServerMessage();
     }
   } else if (touchHeld && !touched) {
     if (touchChangedAt == 0) touchChangedAt = now;
@@ -341,10 +330,6 @@ void loop() {
   if (now - lastCommandCheck >= COMMAND_INTERVAL_MS) {
     lastCommandCheck = now;
     checkCommands();
-  }
-  if (now - lastMessageCheck >= MESSAGE_INTERVAL_MS || lastMessageCheck == 0) {
-    lastMessageCheck = now;
-    fetchMessage();
   }
   checkTouch();
 
