@@ -593,7 +593,7 @@ async function pageWarehouse(root) {
         <tbody>${tables.map((t) => `<tr><td>${esc(TABLE_LABEL[t.name] || t.name)}</td><td>${t.rows == null ? '—' : n(t.rows)}</td><td>${fmtSize(t.bytes)}</td>
           <td><div class="bar thin"><span style="width:${Math.max(1, (t.bytes / tables[0].bytes) * 100)}%"></span></div></td></tr>`).join('')}</tbody>
       </table></div>
-      <p class="hint" style="margin-top:10px">Pozostałe ${fmtSize(Math.max(0, st.db_bytes - tables.reduce((a, t) => a + t.bytes, 0)))} to tabele systemowe Supabase (logowanie, pliki, indeksy wewnętrzne).${rd.first ? ` Najstarszy odczyt: ${esc(fmtDate(rd.first))}.` : ''}</p>
+      <p class="hint" style="margin-top:10px">Pozostałe ${fmtSize(Math.max(0, st.db_bytes - tables.reduce((a, t) => a + t.bytes, 0)))} to tabele systemowe Supabase (logowanie, pliki, indeksy wewnętrzne).${rd.first ? ` Najstarszy odczyt: ${esc(fmtDate(rd.first))}.` : ''} Odczyty starsze niż 180 dni baza usuwa sama co noc.</p>
     </div>`;
   bindTopbar(root);
 }
