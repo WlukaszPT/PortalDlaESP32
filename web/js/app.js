@@ -690,6 +690,7 @@ const TABS = [
   ['galeria', 'Galeria', 'image'],
   ['lokalizacja', 'Lokalizacja', 'pin'],
   ['serwis', 'Serwis', 'wrench'],
+  ['wiadomosc', 'Wiadomość serwera', 'send'],
   ['dokumentacja', 'Dokumentacja', 'file'],
 ];
 
@@ -717,6 +718,7 @@ async function pageInvestment(root, id, tab) {
   else if (tab === 'galeria') await tabGallery(el, inv);
   else if (tab === 'lokalizacja') await tabLocation(el, inv);
   else if (tab === 'serwis') await tabService(el, inv);
+  else if (tab === 'wiadomosc') tabMessage(el, inv);
   else if (tab === 'dokumentacja') await tabDocuments(el, inv);
   else await tabDevices(el, inv);
 }
@@ -1529,6 +1531,46 @@ async function tabService(el, inv) {
       try { await q(sb.from('service_entries').delete().eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
     };
   });
+}
+
+// ── Zakładka: wiadomość serwera ──
+
+// Tekst, który ESP32 tej inwestycji wypisuje w monitorze portu szeregowego po dotknięciu pinu dotykowego.
+function tabMessage(el, inv) {
+  const admin = isAdmin();
+  const msg = inv.server_message || '';
+  el.innerHTML = `
+    <div class="panel glass">
+      <h2>Wiadomość serwera</h2>
+      <p class="hint">Urządzenia ESP32 tej inwestycji pobierają tę wiadomość co 30 s. Po dotknięciu palcem pinu dotykowego (GPIO4) wypisują ją w monitorze portu szeregowego.</p>
+      <form id="msg-form" class="list">
+        <label class="lbl">Treść wiadomości
+          <textarea class="inp" name="message" maxlength="500" placeholder="np. Zachowaj ostrożność" style="min-height:110px;resize:vertical" ${admin ? '' : 'readonly'}>${esc(msg)}</textarea></label>
+        <div class="svc-actions">
+          <span class="sub" style="margin-right:auto">${inv.server_message_at ? `Zmieniono ${esc(fmtDate(inv.server_message_at))}` : 'Wiadomość nie była jeszcze ustawiona.'}</span>
+          <span class="counter" data-count>${msg.length} / 500</span>
+          ${admin ? `<button class="btn" type="button" data-clear ${msg ? '' : 'disabled'}>${icon('trash', 16)} Wyczyść</button>
+          <button class="btn primary" type="submit">${icon('send', 16)} Zapisz wiadomość</button>` : ''}
+        </div>
+        ${admin ? '' : '<p class="hint" style="margin:0">Wiadomość może zmienić administrator.</p>'}
+      </form>
+    </div>`;
+
+  const form = el.querySelector('#msg-form');
+  const count = form.querySelector('[data-count]');
+  form.message.oninput = () => { count.textContent = `${form.message.value.length} / 500`; };
+  const save = async (text) => {
+    try {
+      const patch = { server_message: text || null, server_message_at: new Date().toISOString() };
+      await q(sb.from('investments').update(patch).eq('id', inv.id));
+      Object.assign(inv, patch);
+      toast(text ? 'Wiadomość zapisana.' : 'Wiadomość usunięta.', 'ok');
+      tabMessage(el, inv);
+    } catch (err) { fail(err); }
+  };
+  form.onsubmit = (e) => { e.preventDefault(); if (admin) save(form.message.value.trim()); };
+  const clear = form.querySelector('[data-clear]');
+  if (clear) clear.onclick = () => save('');
 }
 
 // ── Zakładka: dokumentacja ──

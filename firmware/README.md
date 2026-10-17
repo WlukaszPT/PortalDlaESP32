@@ -6,6 +6,7 @@ Program testowy `portal_esp32/portal_esp32.ino` (płytka ESP32 DevKit, Arduino I
 - o północy (czas polski pobierany z internetu) zeruje `counter`,
 - `counter` zapisuje w pamięci flash, więc po restarcie albo zaniku zasilania liczy dalej (chyba że w międzyczasie minęła północ),
 - co 5 s sprawdza polecenia; przycisk **Uruchom przejście** w zakładce Urządzenia ustawia `tornOn = true`, a wbudowana niebieska dioda (GPIO2) świeci wtedy 10 s.
+- co 30 s pobiera **Wiadomość serwera** (zakładka w inwestycji na stronie); po dotknięciu palcem pinu dotykowego **D4 (GPIO4, T0)** wypisuje ją w monitorze portu szeregowego, np. `>>> Wiadomość serwera: Zachowaj ostrożność`. Jeden dotyk = jeden komunikat; kolejny po zabraniu palca. Podczas startu płytki nie dotykaj tego pinu (program mierzy wtedy jego wartość spoczynkową).
 
 ## Uruchomienie
 
