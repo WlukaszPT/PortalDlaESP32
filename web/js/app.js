@@ -698,14 +698,16 @@ async function pageInvestment(root, id, tab) {
   const inv = await q(sb.from('investments').select('*').eq('id', id).maybeSingle());
   if (!inv) { root.innerHTML = `<div class="panel glass"><h2>Nie znaleziono inwestycji</h2><a class="btn" href="#/inwestycje">Wróć do listy</a></div>`; return; }
   document.title = `${inv.name} · CloudEA`;
-  if (!TABS.some(([k]) => k === tab)) tab = 'urzadzenia';
+  // Zakładkę „Wiadomość serwera” widzi tylko właściciel portalu.
+  const tabs = TABS.filter(([k]) => k !== 'wiadomosc' || state.isOwner);
+  if (!tabs.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
     ${topbar(esc(inv.name), `<a href="#/inwestycje" style="color:var(--muted);text-decoration:none">${icon('arrowLeft', 12).replace('class="ic"', 'class="ic" style="display:inline;vertical-align:-1px"')} Inwestycje</a>${inv.notes ? ` · ${esc(inv.notes)}` : ''}${inv.address ? ` · ${esc(inv.address)}` : ''}`,
       `<button class="btn sm" type="button" data-admin data-edit>${icon('edit', 15)} Edytuj</button>
        <button class="btn sm danger" type="button" data-admin data-del>${icon('trash', 15)}</button>`)}
     <nav class="tabs glass" style="border-radius:999px">
-      ${TABS.map(([k, label, ic]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/inwestycja/${id}/${k}">${icon(ic, 16)} ${label}</a>`).join('')}
+      ${tabs.map(([k, label, ic]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/inwestycja/${id}/${k}">${icon(ic, 16)} ${label}</a>`).join('')}
     </nav>
     <div id="tab" class="fade-in"></div>`;
   bindTopbar(root);
@@ -1536,8 +1538,8 @@ async function tabService(el, inv) {
 // ── Zakładka: wiadomość serwera ──
 
 // Tekst, który ESP32 tej inwestycji wypisuje w monitorze portu szeregowego po dotknięciu pinu dotykowego.
+// Zakładka tylko dla właściciela portalu.
 function tabMessage(el, inv) {
-  const admin = isAdmin();
   const msg = inv.server_message || '';
   el.innerHTML = `
     <div class="panel glass">
@@ -1545,14 +1547,13 @@ function tabMessage(el, inv) {
       <p class="hint">Po dotknięciu palcem pinu dotykowego D4 (GPIO4) urządzenie ESP32 tej inwestycji pobiera tę wiadomość z serwera i wypisuje ją w monitorze portu szeregowego.</p>
       <form id="msg-form" class="list">
         <label class="lbl">Treść wiadomości
-          <textarea class="inp" name="message" maxlength="500" placeholder="np. Zachowaj ostrożność" style="min-height:110px;resize:vertical" ${admin ? '' : 'readonly'}>${esc(msg)}</textarea></label>
+          <textarea class="inp" name="message" maxlength="500" placeholder="np. Zachowaj ostrożność" style="min-height:110px;resize:vertical">${esc(msg)}</textarea></label>
         <div class="svc-actions">
           <span class="sub" style="margin-right:auto">${inv.server_message_at ? `Zmieniono ${esc(fmtDate(inv.server_message_at))}` : 'Wiadomość nie była jeszcze ustawiona.'}</span>
           <span class="counter" data-count>${msg.length} / 500</span>
-          ${admin ? `<button class="btn" type="button" data-clear ${msg ? '' : 'disabled'}>${icon('trash', 16)} Wyczyść</button>
-          <button class="btn primary" type="submit">${icon('send', 16)} Zapisz wiadomość</button>` : ''}
+          <button class="btn" type="button" data-clear ${msg ? '' : 'disabled'}>${icon('trash', 16)} Wyczyść</button>
+          <button class="btn primary" type="submit">${icon('send', 16)} Zapisz wiadomość</button>
         </div>
-        ${admin ? '' : '<p class="hint" style="margin:0">Wiadomość może zmienić administrator.</p>'}
       </form>
     </div>`;
 
@@ -1568,9 +1569,8 @@ function tabMessage(el, inv) {
       tabMessage(el, inv);
     } catch (err) { fail(err); }
   };
-  form.onsubmit = (e) => { e.preventDefault(); if (admin) save(form.message.value.trim()); };
-  const clear = form.querySelector('[data-clear]');
-  if (clear) clear.onclick = () => save('');
+  form.onsubmit = (e) => { e.preventDefault(); save(form.message.value.trim()); };
+  form.querySelector('[data-clear]').onclick = () => save('');
 }
 
 // ── Zakładka: dokumentacja ──
