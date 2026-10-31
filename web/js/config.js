@@ -8,6 +8,9 @@ export const PHOTO_BUCKET = 'investment-photos';
 export const MAX_PHOTOS = 5;
 export const DOC_BUCKET = 'investment-docs';
 export const MAX_DOC_BYTES = 20 * 1024 * 1024;
+// Programy ESP32 (.bin) do zdalnej aktualizacji, tylko dla administratora.
+export const FW_BUCKET = 'device-firmware';
+export const MAX_FW_BYTES = 4 * 1024 * 1024;
 export const MAX_COMMAND_BYTES = 8192;
 // Urządzenie uznajemy za online, jeśli odezwało się w ciągu tylu minut.
 export const ONLINE_MINUTES = 15;

@@ -226,9 +226,9 @@ body.role-user [data-admin] { display: none !important; }
 .empty { color: var(--muted); padding: 26px; text-align: center; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
 
 /* ───────── Zakładki ───────── */
-.tabs { display: flex; gap: 6px; padding: 6px; overflow-x: auto; }
+.tabs { display: flex; gap: 4px; padding: 6px; overflow-x: auto; }
 .tab {
-  display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 999px; border: 0; background: none;
+  display: inline-flex; align-items: center; justify-content: center; flex: 1 0 auto; gap: 7px; padding: 9px 12px; border-radius: 999px; border: 0; background: none;
   color: var(--text); opacity: 0.8; cursor: pointer; text-decoration: none; font-weight: 600; font-size: 14px; white-space: nowrap;
   transition: opacity .25s ease, transform .25s cubic-bezier(.2,.8,.2,1), background .25s, box-shadow .25s, color .25s;
 }

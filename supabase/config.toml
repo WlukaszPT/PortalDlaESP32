@@ -5,3 +5,7 @@ project_id = "portal-esp32"
 # Funkcja sama sprawdza token zalogowanego administratora.
 [functions.admin-users]
 verify_jwt = false
+
+# ESP32 nie ma tokenu logowania: funkcja sama sprawdza klucz urządzenia.
+[functions.device-firmware]
+verify_jwt = false
