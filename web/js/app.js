@@ -1,5 +1,5 @@
 import {
-  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, MAX_PHOTOS, ONLINE_MINUTES, DB_LIMIT_BYTES, FILES_LIMIT_BYTES,
+  SUPABASE_URL, SUPABASE_KEY, PHOTO_BUCKET, DOC_BUCKET, MAX_DOC_BYTES, FW_BUCKET, MAX_FW_BYTES, MAX_PHOTOS, ONLINE_MINUTES, DB_LIMIT_BYTES, FILES_LIMIT_BYTES,
 } from './config.js';
 import { icon } from './icons.js';
 
@@ -692,14 +692,15 @@ const TABS = [
   ['serwis', 'Serwis', 'wrench'],
   ['wiadomosc', 'Wiadomość serwera', 'send'],
   ['dokumentacja', 'Dokumentacja', 'file'],
+  ['firmware', 'Firmware', 'cpu'],
 ];
 
 async function pageInvestment(root, id, tab) {
   const inv = await q(sb.from('investments').select('*').eq('id', id).maybeSingle());
   if (!inv) { root.innerHTML = `<div class="panel glass"><h2>Nie znaleziono inwestycji</h2><a class="btn" href="#/inwestycje">Wróć do listy</a></div>`; return; }
   document.title = `${inv.name} · CloudEA`;
-  // Zakładkę „Wiadomość serwera” widzi tylko właściciel portalu.
-  const tabs = TABS.filter(([k]) => k !== 'wiadomosc' || state.isOwner);
+  // Zakładkę „Wiadomość serwera” widzi tylko właściciel portalu, a „Firmware” administrator.
+  const tabs = TABS.filter(([k]) => (k !== 'wiadomosc' || state.isOwner) && (k !== 'firmware' || isAdmin()));
   if (!tabs.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
@@ -722,6 +723,7 @@ async function pageInvestment(root, id, tab) {
   else if (tab === 'serwis') await tabService(el, inv);
   else if (tab === 'wiadomosc') tabMessage(el, inv);
   else if (tab === 'dokumentacja') await tabDocuments(el, inv);
+  else if (tab === 'firmware') await tabFirmware(el, inv);
   else await tabDevices(el, inv);
 }
 
@@ -763,6 +765,8 @@ async function deleteInvestment(inv) {
     if (photos.length) await sb.storage.from(PHOTO_BUCKET).remove(photos.map((p) => p.storage_path));
     const docs = await q(sb.from('investment_documents').select('storage_path').eq('investment_id', inv.id));
     if (docs.length) await sb.storage.from(DOC_BUCKET).remove(docs.map((d) => d.storage_path));
+    const devs = await q(sb.from('devices').select('id').eq('investment_id', inv.id));
+    await removeFirmwareFiles(devs.map((d) => d.id));
     await q(sb.from('investments').delete().eq('id', inv.id));
     toast('Inwestycja usunięta.', 'ok');
     location.hash = '#/inwestycje';
@@ -891,7 +895,7 @@ function bindDeviceCards(el, inv, devices) {
     };
     card.querySelector('[data-remove]').onclick = async () => {
       if (!await confirmDialog('Usunąć urządzenie?', `${d.name || typeOf(d.product_type).name} zostanie usunięte razem z odczytami. Klucz ${d.device_key || ''} przestanie działać.`)) return;
-      try { await q(sb.from('devices').delete().eq('id', d.id)); toast('Usunięto.', 'ok'); refreshOfflineBadge(); tabDevices(el, inv); } catch (e) { fail(e); }
+      try { await removeFirmwareFiles([d.id]); await q(sb.from('devices').delete().eq('id', d.id)); toast('Usunięto.', 'ok'); refreshOfflineBadge(); tabDevices(el, inv); } catch (e) { fail(e); }
     };
     card.querySelectorAll('[data-metric]').forEach((cb) => {
       cb.onchange = async () => {
@@ -1655,6 +1659,173 @@ async function tabDocuments(el, inv) {
       } catch (e) { fail(e); break; }
     }
     tabDocuments(el, inv);
+  };
+}
+
+// ── Zakładka: firmware (zdalna aktualizacja ESP32) ──
+
+// Program ESP32 wpisuje swój numer wersji jako tekst „CLOUDEA_FW_VERSION=3” (stała w portal_esp32.ino),
+// dzięki czemu strona odczytuje wersję prosto z pliku .bin.
+const FW_MARKER = /CLOUDEA_FW_VERSION=(\d{1,7})/;
+
+async function removeFirmwareFiles(deviceIds) {
+  if (!deviceIds.length) return;
+  const rows = await q(sb.from('firmware_releases').select('storage_path, source_path').in('device_id', deviceIds));
+  const paths = rows.flatMap((r) => [r.storage_path, r.source_path]).filter(Boolean);
+  if (paths.length) await sb.storage.from(FW_BUCKET).remove(paths);
+}
+
+// Sprawdza wybrany plik .bin: czy to program ESP32, jaką ma wersję i czy zawiera klucz urządzenia.
+async function inspectFirmware(file, deviceKey) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf[0] !== 0xE9) return { error: 'To nie jest skompilowany program ESP32. Wgraj plik .bin (Arduino IDE: Szkic → Eksportuj skompilowany plik binarny), a nie .ino.' };
+  const text = new TextDecoder('latin1').decode(buf);
+  const m = text.match(FW_MARKER);
+  return { version: m ? Number(m[1]) : null, hasKey: !!deviceKey && text.includes(deviceKey) };
+}
+
+async function tabFirmware(el, inv) {
+  const devices = (await q(sb.from('devices').select('*').eq('investment_id', inv.id).order('created_at')))
+    .filter((d) => typeOf(d.product_type).connected);
+  if (!devices.length) {
+    el.innerHTML = '<div class="empty glass">Ta inwestycja nie ma urządzeń łączących się ze stroną.</div>';
+    return;
+  }
+  if (!devices.some((d) => d.id === el.fwDevice)) el.fwDevice = devices[0].id;
+  const d = devices.find((x) => x.id === el.fwDevice);
+  const rels = await q(sb.from('firmware_releases').select('*').eq('device_id', d.id).order('version', { ascending: false }));
+  const latest = rels[0];
+  const onDev = d.firmware_version;
+
+  let status;
+  if (onDev == null) status = '<span class="pill failed">nieznana</span> Urządzenie jeszcze nie zgłosiło wersji. Pierwszy program z aktualizacją zdalną trzeba wgrać przez kabel USB.';
+  else if (latest && latest.version > onDev) status = `<span class="pill new">czeka na pobranie</span> Na urządzeniu jest wersja ${onDev}, na stronie ${latest.version}. ESP32 pobierze ją przy najbliższym sprawdzeniu (co minutę).`;
+  else status = `<span class="pill done">aktualne</span> Na urządzeniu jest wersja ${onDev}.`;
+
+  el.innerHTML = `
+    <div class="panel glass" style="margin-bottom:16px">
+      <div class="gal-head">
+        <div class="grow"><h2>Firmware</h2>
+          <p class="hint" style="margin:0">Zdalna aktualizacja programu ESP32. Wgraj skompilowany plik <b>.bin</b> (Arduino IDE: Szkic → Eksportuj skompilowany plik binarny). Urządzenie co minutę sprawdza, czy jest nowsza wersja, samo ją pobiera i uruchamia się ponownie.</p></div>
+      </div>
+      <div class="form-grid" style="margin-top:12px">
+        <label class="lbl">Urządzenie
+          <select class="inp" id="fw-dev">${devices.map((x) => `<option value="${x.id}"${x.id === d.id ? ' selected' : ''}>${esc(x.name || typeOf(x.product_type).name)} · ${esc(x.device_key)}</option>`).join('')}</select></label>
+      </div>
+      <p class="run-last" style="margin:12px 0 0">${status}${d.firmware_checked_at ? ` <span class="sub">Ostatnie sprawdzenie: ${esc(fmtDate(d.firmware_checked_at))}.</span>` : ''}</p>
+    </div>
+
+    <div class="panel glass" style="margin-bottom:16px">
+      <h2>Wgraj nową wersję</h2>
+      <form id="fw-form" class="list">
+        <div class="form-grid">
+          <label class="lbl">Program .bin (wymagany)<input class="inp" type="file" name="bin" accept=".bin,application/octet-stream" required></label>
+          <label class="lbl">Kopia źródła .ino (opcjonalnie)<input class="inp" type="file" name="ino" accept=".ino,.txt,text/plain"></label>
+          <label class="lbl">Numer wersji<input class="inp" type="number" name="version" min="1" max="1000000" step="1" required value="${(latest?.version || onDev || 0) + 1}"></label>
+        </div>
+        <label class="lbl">Opis zmian (opcjonalnie)<input class="inp" name="notes" maxlength="500" placeholder="np. miganie diody co 1 s"></label>
+        <p class="hint" id="fw-check" style="margin:0">Numer wersji odczytam z pliku .bin (stała FW_VERSION w programie).</p>
+        <div class="svc-actions"><button class="btn primary" type="submit">${icon('upload', 16)} Wgraj na stronę</button></div>
+      </form>
+    </div>
+
+    <div class="panel glass">
+      <h2>Wersje na stronie</h2>
+      ${rels.length ? `<div class="docs">${rels.map((r) => `
+        <div class="doc" data-rel="${r.id}">
+          <div class="doc-icon">${icon('cpu', 22)}<span>v${r.version}</span></div>
+          <div class="grow" style="min-width:0">
+            <div class="title">Wersja ${r.version}${r === latest ? ' · najnowsza' : ''}${onDev === r.version ? ' · na urządzeniu' : ''}</div>
+            <div class="sub">${esc(r.file_name)} · ${esc(fmtSize(r.size_bytes))} · dodano ${esc(fmtDate(r.created_at))}${r.notes ? ` · ${esc(r.notes)}` : ''}</div>
+          </div>
+          <button class="btn icon ghost sm" type="button" data-get="bin" title="Pobierz .bin">${icon('download', 15)}</button>
+          ${r.source_path ? `<button class="btn sm" type="button" data-get="ino" title="Pobierz kopię źródła">${icon('file', 15)} .ino</button>` : ''}
+          <button class="btn icon ghost sm" type="button" data-del title="Usuń">${icon('trash', 15)}</button>
+        </div>`).join('')}</div>` : '<p class="hint">Nie wgrano jeszcze żadnej wersji dla tego urządzenia.</p>'}
+    </div>`;
+
+  el.querySelector('#fw-dev').onchange = (e) => { el.fwDevice = e.target.value; tabFirmware(el, inv); };
+
+  el.querySelectorAll('[data-rel]').forEach((row) => {
+    const r = rels.find((x) => x.id === row.dataset.rel);
+    row.querySelectorAll('[data-get]').forEach((b) => {
+      b.onclick = async () => {
+        const ino = b.dataset.get === 'ino';
+        const { data, error } = await sb.storage.from(FW_BUCKET).createSignedUrl(ino ? r.source_path : r.storage_path, 600, { download: ino ? r.source_name : r.file_name });
+        if (error) return fail(error);
+        const a = document.createElement('a'); a.href = data.signedUrl; a.click();
+      };
+    });
+    row.querySelector('[data-del]').onclick = async () => {
+      if (!await confirmDialog('Usunąć wersję?', `Wersja ${r.version} zostanie usunięta ze strony. Urządzenie, które już ją ma, nie zmieni programu.`)) return;
+      try {
+        await q(sb.from('firmware_releases').delete().eq('id', r.id));
+        await sb.storage.from(FW_BUCKET).remove([r.storage_path, r.source_path].filter(Boolean));
+        tabFirmware(el, inv);
+      } catch (e) { fail(e); }
+    };
+  });
+
+  const form = el.querySelector('#fw-form');
+  const check = el.querySelector('#fw-check');
+  let info = null;
+  form.bin.onchange = async () => {
+    info = null;
+    const file = form.bin.files[0];
+    if (!file) return;
+    info = await inspectFirmware(file, d.device_key);
+    if (info.error) { check.textContent = info.error; check.style.color = '#fecaca'; return; }
+    check.style.color = '';
+    if (info.version) form.version.value = info.version;
+    check.textContent = [
+      info.version ? `W pliku jest wersja ${info.version}.` : 'Nie znalazłem w pliku numeru wersji (program bez stałej FW_VERSION?). Wpisz go ręcznie, taki sam jak w programie.',
+      info.hasKey ? `Plik zawiera klucz ${d.device_key}.` : `Uwaga: w pliku nie ma klucza ${d.device_key}, to chyba program innego urządzenia.`,
+    ].join(' ');
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const bin = form.bin.files[0];
+    const ino = form.ino.files[0];
+    const version = Number(form.version.value);
+    if (!info) info = await inspectFirmware(bin, d.device_key);
+    if (info.error) return toast(info.error, 'err');
+    if (bin.size > MAX_FW_BYTES) return toast(`Plik jest za duży (maks. ${fmtSize(MAX_FW_BYTES)}).`, 'err');
+    if (ino && ino.size > 1024 * 1024) return toast('Plik .ino jest za duży (maks. 1 MB).', 'err');
+    if (rels.some((r) => r.version === version)) return toast(`Wersja ${version} już jest na stronie. Podnieś FW_VERSION w programie.`, 'err');
+    if (onDev != null && version <= onDev) return toast(`Na urządzeniu jest już wersja ${onDev}. Nowa musi mieć wyższy numer, inaczej ESP32 jej nie pobierze.`, 'err');
+    if (info.version && info.version !== version) {
+      if (!await confirmDialog('Inny numer wersji', `W pliku jest wersja ${info.version}, a wpisano ${version}. ESP32 po aktualizacji zgłosi ${info.version} i może pobierać plik w kółko. Wgrać mimo to?`, 'Wgraj mimo to')) return;
+    }
+    if (!info.hasKey) {
+      if (!await confirmDialog('Inny klucz urządzenia', `W pliku nie ma klucza ${d.device_key}. Jeśli to program innej płytki, po aktualizacji urządzenie zacznie wysyłać dane jako tamta płytka. Wgrać mimo to?`, 'Wgraj mimo to')) return;
+    }
+
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true; btn.lastChild.textContent = ' Wysyłanie…';
+    const base = `${d.id}/${crypto.randomUUID()}`;
+    const paths = [];
+    try {
+      const { error } = await sb.storage.from(FW_BUCKET).upload(`${base}.bin`, bin, { contentType: 'application/octet-stream' });
+      if (error) throw error;
+      paths.push(`${base}.bin`);
+      if (ino) {
+        const { error: e2 } = await sb.storage.from(FW_BUCKET).upload(`${base}.ino`, ino, { contentType: 'text/plain' });
+        if (e2) throw e2;
+        paths.push(`${base}.ino`);
+      }
+      await q(sb.from('firmware_releases').insert({
+        device_id: d.id, version, storage_path: `${base}.bin`, file_name: bin.name.slice(0, 200), size_bytes: bin.size,
+        source_path: ino ? `${base}.ino` : null, source_name: ino ? ino.name.slice(0, 200) : null, notes: form.notes.value.trim() || null,
+      }));
+      toast(`Wersja ${version} wgrana. ESP32 pobierze ją w ciągu minuty.`, 'ok');
+      tabFirmware(el, inv);
+    } catch (err) {
+      if (paths.length) await sb.storage.from(FW_BUCKET).remove(paths);
+      btn.disabled = false; btn.lastChild.textContent = ' Wgraj na stronę';
+      fail(err);
+    }
   };
 }
 

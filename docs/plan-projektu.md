@@ -40,7 +40,7 @@ Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywnośc
 
 9. **Publikacja strony.** Wdrożenie na GitHub Pages przez GitHub Actions przy każdym pushu do `main`, skonfigurowanie adresów strony w ustawieniach Supabase Auth.
 
-10. **Testy całości, utrzymanie i rozbudowa.** Test pełnego obiegu (ESP32 → baza → strona → ESP32), obsługa zaniku Wi‑Fi i ponowień, automatyczne czyszczenie starych odczytów (limit 500 MB bazy w planie Free). Na później: wiele urządzeń, aktualizacje firmware OTA, powiadomienia.
+10. **Testy całości, utrzymanie i rozbudowa.** Test pełnego obiegu (ESP32 → baza → strona → ESP32), obsługa zaniku Wi‑Fi i ponowień, automatyczne czyszczenie starych odczytów (limit 500 MB bazy w planie Free). Na później: wiele urządzeń, powiadomienia. Zrobione: zdalna aktualizacja firmware (OTA) z zakładki „Firmware” w inwestycji (2026-10-31).
 
 ## Alternatywy (gdyby Supabase nie pasował)
 
