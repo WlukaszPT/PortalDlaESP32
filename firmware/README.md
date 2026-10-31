@@ -9,13 +9,13 @@ Program testowy `portal_esp32/portal_esp32.ino` (płytka ESP32 DevKit, Arduino I
 - po dotknięciu palcem pinu dotykowego **D4 (GPIO4, T0)** pobiera z bazy **Wiadomość serwera** (zakładka w inwestycji na stronie) i wypisuje ją w monitorze portu szeregowego (nie przechowuje jej w pamięci, przy każdym dotyku pobiera od nowa), np. `>>> Wiadomość serwera: Zachowaj ostrożność`. Jeden dotyk = jeden komunikat; kolejny po zabraniu palca. Podczas startu płytki nie dotykaj tego pinu (program mierzy wtedy jego wartość spoczynkową).
 
 - wbudowana dioda (GPIO2) miga co 1 s; po **Uruchom przejście** świeci ciągle 10 s i wraca do migania, a podczas pobierania nowego programu miga szybko (co 0,1 s),
-- co minutę pyta stronę (`device_check_firmware`), czy w zakładce **Firmware** jest nowsza wersja niż wkompilowana `FW_VERSION`; jeśli tak, pobiera plik .bin przez HTTPS (funkcja `device-firmware`), zapisuje go we flashu i uruchamia się ponownie. Jedna wersja jest próbowana najwyżej 3 razy.
+- co minutę pyta stronę (`device_check_firmware`), czy w zakładce **Firmware** jest nowsza wersja niż wkompilowana `FW_VERSION` (data kompilacji); jeśli tak, pobiera plik .bin przez HTTPS (funkcja `device-firmware`), zapisuje go we flashu i uruchamia się ponownie. Jedna wersja jest próbowana najwyżej 3 razy.
 
 ## Zdalna aktualizacja (OTA)
 
 ESP32 nie kompiluje kodu, dlatego na stronę wgrywa się **skompilowany plik .bin**, a nie .ino (.ino można dołączyć jako kopię źródła).
 
-1. W `portal_esp32.ino` podnieś `#define FW_VERSION` (np. z 1 na 2).
+1. Numeru wersji nie trzeba zmieniać: program liczy go sam z daty i godziny kompilacji (`RRMMDDGGMM`, np. `2610311838` = 31.10.2026, 18:38), więc każdy nowy eksport ma wyższy numer.
 2. Arduino IDE: **Szkic → Eksportuj skompilowany plik binarny**. Plik `portal_esp32.ino.bin` pojawi się w folderze szkicu (albo w `build/esp32.esp32.esp32doit-devkit-v1/`). Nie bierz plików z `bootloader`, `partitions` ani `merged` w nazwie.
 3. Strona → inwestycja → **Firmware** → wybierz urządzenie i dodaj plik .bin. Strona sama odczyta numer wersji z pliku i sprawdzi, czy jest w nim klucz tego urządzenia.
 4. W ciągu minuty ESP32 pobierze program i uruchomi się ponownie; w zakładce widać wersję zgłoszoną przez urządzenie.

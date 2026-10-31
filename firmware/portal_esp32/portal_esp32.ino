@@ -16,7 +16,8 @@
 //    pobiera plik .bin przez HTTPS, zapisuje go we flashu i uruchamia się ponownie (OTA).
 //
 // ZDALNA AKTUALIZACJA – jak wydać nową wersję:
-//  1. Podnieś FW_VERSION poniżej (np. z 1 na 2).
+//  1. Numer wersji ustawia się sam z daty i godziny kompilacji (RRMMDDGGMM, np. 2610311838
+//     = 31.10.2026, 18:38), więc nic nie trzeba zmieniać w kodzie.
 //  2. Arduino IDE: Szkic → Eksportuj skompilowany plik binarny. Plik .bin pojawi się w folderze
 //     szkicu (lub w podfolderze build/...). Wybierz ten bez „bootloader”/„partitions”/„merged” w nazwie.
 //  3. Strona → inwestycja → Firmware → wybierz urządzenie, dodaj plik .bin (i ewentualnie .ino).
@@ -39,13 +40,27 @@
 #include "secrets.h"
 #include "root_ca.h"
 
-// Numer wersji tego programu. Podnieś go przed każdym wgraniem na stronę (zakładka Firmware).
-#define FW_VERSION 1
+// Numer wersji programu liczony automatycznie z daty i godziny kompilacji (__DATE__ = "Oct 31 2026",
+// __TIME__ = "18:38:12") w postaci RRMMDDGGMM, np. 2610311838. Każdy nowy eksport ma wyższy numer.
+constexpr int fwDigit(char c) { return c == ' ' ? 0 : c - '0'; }
+constexpr int fwMonth(const char* d) {
+  return d[0] == 'J' ? (d[1] == 'a' ? 1 : (d[2] == 'n' ? 6 : 7))
+       : d[0] == 'F' ? 2
+       : d[0] == 'M' ? (d[2] == 'r' ? 3 : 5)
+       : d[0] == 'A' ? (d[1] == 'p' ? 4 : 8)
+       : d[0] == 'S' ? 9
+       : d[0] == 'O' ? 10
+       : d[0] == 'N' ? 11 : 12;
+}
+constexpr long long fwBuild(const char* d, const char* t) {
+  return ((((long long)(fwDigit(d[9]) * 10 + fwDigit(d[10])) * 100 + fwMonth(d)) * 100
+           + fwDigit(d[4]) * 10 + fwDigit(d[5])) * 100 + fwDigit(t[0]) * 10 + fwDigit(t[1])) * 100
+         + fwDigit(t[3]) * 10 + fwDigit(t[4]);
+}
+const long long FW_VERSION = fwBuild(__DATE__, __TIME__);
 
-#define STR_(x) #x
-#define STR(x) STR_(x)
-// Po tym napisie strona odczytuje numer wersji z pliku .bin. Nie zmieniaj jego treści.
-const char FW_TAG[] = "CLOUDEA_FW_VERSION=" STR(FW_VERSION);
+// Po tym napisie strona odczytuje datę kompilacji (czyli wersję) z pliku .bin. Nie zmieniaj go.
+const char FW_TAG[] = "CLOUDEA_FW_BUILD=" __DATE__ " " __TIME__;
 
 const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
 const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy dotknąć go palcem lub kablem
@@ -333,8 +348,8 @@ class UpdateSink : public Stream {
 
 // Pobiera wersję `version` (rozmiar `size` bajtów) i zapisuje ją jako nowy program.
 // Przy sukcesie ESP32 uruchamia się ponownie i nie wraca z tej funkcji.
-bool downloadFirmware(long version, long size) {
-  Serial.printf("OTA: pobieram wersję %ld (%ld B)...\n", version, size);
+bool downloadFirmware(long long version, long size) {
+  Serial.printf("OTA: pobieram wersję %lld (%ld B)...\n", version, size);
   if (!Update.begin(size)) {
     Serial.printf("OTA: brak miejsca na program (%s). Wybierz schemat partycji z OTA.\n", Update.errorString());
     return false;
@@ -372,7 +387,7 @@ bool downloadFirmware(long version, long size) {
   startBlink(BLINK_S);
 
   if (ok) {
-    Serial.printf("OTA: wersja %ld zapisana, uruchamiam ponownie\n", version);
+    Serial.printf("OTA: wersja %lld zapisana, uruchamiam ponownie\n", version);
     delay(500);
     ESP.restart();
   }
@@ -398,18 +413,18 @@ void checkFirmware() {
   }
   if (!(doc["update"] | false)) return;
 
-  long version = doc["version"] | 0L;
+  long long version = doc["version"] | 0LL;
   long size = doc["size"] | 0L;
   if (version <= FW_VERSION || size <= 0) return;
 
   // Ta sama wersja nie udała się już kilka razy (np. za duży plik): nie próbujemy w kółko.
-  int tries = store.getLong("fw_ver", 0) == version ? store.getInt("fw_tries", 0) : 0;
+  int tries = store.getLong64("fw_ver", 0) == version ? store.getInt("fw_tries", 0) : 0;
   if (tries >= FIRMWARE_MAX_TRIES) return;
-  store.putLong("fw_ver", version);
+  store.putLong64("fw_ver", version);
   store.putInt("fw_tries", tries + 1);
 
   if (!downloadFirmware(version, size) && tries + 1 >= FIRMWARE_MAX_TRIES) {
-    Serial.printf("OTA: wersja %ld nie udała się %d razy, nie próbuję więcej. Wgraj nowszą.\n", version, FIRMWARE_MAX_TRIES);
+    Serial.printf("OTA: wersja %lld nie udała się %d razy, nie próbuję więcej. Wgraj nowszą.\n", version, FIRMWARE_MAX_TRIES);
   }
 }
 
@@ -447,7 +462,7 @@ void turnOnLed() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.printf("CloudEA, wersja programu %d (%s)\n", FW_VERSION, FW_TAG);
+  Serial.printf("CloudEA, wersja programu %lld (%s)\n", FW_VERSION, FW_TAG);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
   startBlink(BLINK_S);

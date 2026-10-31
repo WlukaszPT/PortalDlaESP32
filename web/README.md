@@ -23,7 +23,7 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
   - *Lokalizacja*: współrzędne i mapa z pinezką,
   - *Serwis*: historia napraw (data, opis, kto wpisał),
   - *Dokumentacja*: pliki PDF (prywatne, do 20 MB każdy).
-  - *Firmware* (tylko administrator): wgrywanie skompilowanego programu ESP32 (.bin, opcjonalnie z kopią .ino) dla wybranego urządzenia. Strona odczytuje numer wersji z pliku i sprawdza klucz urządzenia; ESP32 co minutę sprawdza nową wersję i aktualizuje się sam (OTA).
+  - *Firmware* (tylko administrator): wgrywanie skompilowanego programu ESP32 (.bin, opcjonalnie z kopią .ino) dla wybranego urządzenia. Strona odczytuje numer wersji (datę kompilacji) z pliku i sprawdza klucz urządzenia; ESP32 co minutę sprawdza nową wersję i aktualizuje się sam (OTA).
 - **Mapa** – wszystkie inwestycje na mapie Polski.
 - **Hurtownia danych** – ile miejsca zajmuje baza (limit 500 MB) i pliki (limit 1 GB) w darmowym planie, % wolnego miejsca, co zajmuje najwięcej i na jak długo wystarczy miejsca przy obecnym tempie odczytów. Dane z funkcji `storage_stats()`.
 - **Rejestracja** – link „Zarejestruj się” w panelu logowania; nowe konto widzi tylko ekran „Konto czeka na zatwierdzenie”.

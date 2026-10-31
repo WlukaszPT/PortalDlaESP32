@@ -1664,9 +1664,19 @@ async function tabDocuments(el, inv) {
 
 // ── Zakładka: firmware (zdalna aktualizacja ESP32) ──
 
-// Program ESP32 wpisuje swój numer wersji jako tekst „CLOUDEA_FW_VERSION=3” (stała w portal_esp32.ino),
-// dzięki czemu strona odczytuje wersję prosto z pliku .bin.
+// Program ESP32 zapisuje w sobie datę kompilacji jako „CLOUDEA_FW_BUILD=Oct 31 2026 18:38:12”;
+// numer wersji to z niej RRMMDDGGMM (2610311838), liczony tak samo w portal_esp32.ino.
+// Starsze programy miały wpisany numer ręcznie: „CLOUDEA_FW_VERSION=2”.
+const FW_BUILD = /CLOUDEA_FW_BUILD=([A-Z][a-z]{2}) +(\d{1,2}) \d\d(\d\d) (\d\d):(\d\d)/;
 const FW_MARKER = /CLOUDEA_FW_VERSION=(\d{1,7})/;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// 2610311838 → „31.10.2026, 18:38”; małe numery (1, 2) zostają jak są.
+function fmtFwVersion(v) {
+  const s = String(v ?? '');
+  if (!/^\d{10}$/.test(s)) return s;
+  return `${s.slice(4, 6)}.${s.slice(2, 4)}.20${s.slice(0, 2)}, ${s.slice(6, 8)}:${s.slice(8, 10)}`;
+}
 
 async function removeFirmwareFiles(deviceIds) {
   if (!deviceIds.length) return;
@@ -1680,8 +1690,13 @@ async function inspectFirmware(file, deviceKey) {
   const buf = new Uint8Array(await file.arrayBuffer());
   if (buf[0] !== 0xE9) return { error: 'To nie jest skompilowany program ESP32. Wgraj plik .bin (Arduino IDE: Szkic → Eksportuj skompilowany plik binarny), a nie .ino.' };
   const text = new TextDecoder('latin1').decode(buf);
+  const b = text.match(FW_BUILD);
   const m = text.match(FW_MARKER);
-  return { version: m ? Number(m[1]) : null, hasKey: !!deviceKey && text.includes(deviceKey) };
+  const pad = (n) => String(n).padStart(2, '0');
+  let version = null;
+  if (b && MONTHS.includes(b[1])) version = Number(`${b[3]}${pad(MONTHS.indexOf(b[1]) + 1)}${pad(b[2])}${b[4]}${b[5]}`);
+  else if (m) version = Number(m[1]);
+  return { version, hasKey: !!deviceKey && text.includes(deviceKey) };
 }
 
 async function tabFirmware(el, inv) {
@@ -1699,8 +1714,8 @@ async function tabFirmware(el, inv) {
 
   let status;
   if (onDev == null) status = '<span class="pill failed">nieznana</span> Urządzenie jeszcze nie zgłosiło wersji. Pierwszy program z aktualizacją zdalną trzeba wgrać przez kabel USB.';
-  else if (latest && latest.version > onDev) status = `<span class="pill new">czeka na pobranie</span> Na urządzeniu jest wersja ${onDev}, na stronie ${latest.version}. ESP32 pobierze ją przy najbliższym sprawdzeniu (co minutę).`;
-  else status = `<span class="pill done">aktualne</span> Na urządzeniu jest wersja ${onDev}.`;
+  else if (latest && latest.version > onDev) status = `<span class="pill new">czeka na pobranie</span> Na urządzeniu jest wersja ${fmtFwVersion(onDev)}, na stronie ${fmtFwVersion(latest.version)}. ESP32 pobierze ją przy najbliższym sprawdzeniu (co minutę).`;
+  else status = `<span class="pill done">aktualne</span> Na urządzeniu jest wersja ${fmtFwVersion(onDev)}.`;
 
   el.innerHTML = `
     <div class="panel glass" style="margin-bottom:16px">
@@ -1721,10 +1736,10 @@ async function tabFirmware(el, inv) {
         <div class="form-grid">
           <label class="lbl">Program .bin (wymagany)<input class="inp" type="file" name="bin" accept=".bin,application/octet-stream" required></label>
           <label class="lbl">Kopia źródła .ino (opcjonalnie)<input class="inp" type="file" name="ino" accept=".ino,.txt,text/plain"></label>
-          <label class="lbl">Numer wersji<input class="inp" type="number" name="version" min="1" max="1000000" step="1" required value="${(latest?.version || onDev || 0) + 1}"></label>
+          <label class="lbl">Numer wersji (z daty kompilacji)<input class="inp" type="number" name="version" min="1" max="9999999999" step="1" required readonly placeholder="odczytam z pliku .bin"></label>
         </div>
         <label class="lbl">Opis zmian (opcjonalnie)<input class="inp" name="notes" maxlength="500" placeholder="np. miganie diody co 1 s"></label>
-        <p class="hint" id="fw-check" style="margin:0">Numer wersji odczytam z pliku .bin (stała FW_VERSION w programie).</p>
+        <p class="hint" id="fw-check" style="margin:0">Numer wersji odczytam z pliku .bin: to data i godzina kompilacji, np. 2610311838 = 31.10.2026, 18:38.</p>
         <div class="svc-actions"><button class="btn primary" type="submit">${icon('upload', 16)} Wgraj na stronę</button></div>
       </form>
     </div>
@@ -1733,9 +1748,9 @@ async function tabFirmware(el, inv) {
       <h2>Wersje na stronie</h2>
       ${rels.length ? `<div class="docs">${rels.map((r) => `
         <div class="doc" data-rel="${r.id}">
-          <div class="doc-icon">${icon('cpu', 22)}<span>v${r.version}</span></div>
+          <div class="doc-icon">${icon('cpu', 22)}<span>BIN</span></div>
           <div class="grow" style="min-width:0">
-            <div class="title">Wersja ${r.version}${r === latest ? ' · najnowsza' : ''}${onDev === r.version ? ' · na urządzeniu' : ''}</div>
+            <div class="title">Wersja ${esc(fmtFwVersion(r.version))}${r.version > 99999 ? ` <span class="sub">(${r.version})</span>` : ''}${r === latest ? ' · najnowsza' : ''}${onDev === r.version ? ' · na urządzeniu' : ''}</div>
             <div class="sub">${esc(r.file_name)} · ${esc(fmtSize(r.size_bytes))} · dodano ${esc(fmtDate(r.created_at))}${r.notes ? ` · ${esc(r.notes)}` : ''}</div>
           </div>
           <button class="btn icon ghost sm" type="button" data-get="bin" title="Pobierz .bin">${icon('download', 15)}</button>
@@ -1757,7 +1772,7 @@ async function tabFirmware(el, inv) {
       };
     });
     row.querySelector('[data-del]').onclick = async () => {
-      if (!await confirmDialog('Usunąć wersję?', `Wersja ${r.version} zostanie usunięta ze strony. Urządzenie, które już ją ma, nie zmieni programu.`)) return;
+      if (!await confirmDialog('Usunąć wersję?', `Wersja ${fmtFwVersion(r.version)} zostanie usunięta ze strony. Urządzenie, które już ją ma, nie zmieni programu.`)) return;
       try {
         await q(sb.from('firmware_releases').delete().eq('id', r.id));
         await sb.storage.from(FW_BUCKET).remove([r.storage_path, r.source_path].filter(Boolean));
@@ -1776,9 +1791,10 @@ async function tabFirmware(el, inv) {
     info = await inspectFirmware(file, d.device_key);
     if (info.error) { check.textContent = info.error; check.style.color = '#fecaca'; return; }
     check.style.color = '';
-    if (info.version) form.version.value = info.version;
+    form.version.readOnly = !!info.version;
+    form.version.value = info.version || '';
     check.textContent = [
-      info.version ? `W pliku jest wersja ${info.version}.` : 'Nie znalazłem w pliku numeru wersji (program bez stałej FW_VERSION?). Wpisz go ręcznie, taki sam jak w programie.',
+      info.version ? `W pliku jest wersja ${info.version} (${fmtFwVersion(info.version)}).` : 'Nie znalazłem w pliku numeru wersji (stary program?). Wpisz go ręcznie, taki sam jak w programie.',
       info.hasKey ? `Plik zawiera klucz ${d.device_key}.` : `Uwaga: w pliku nie ma klucza ${d.device_key}, to chyba program innego urządzenia.`,
     ].join(' ');
   };
@@ -1793,8 +1809,8 @@ async function tabFirmware(el, inv) {
     if (info.error) return toast(info.error, 'err');
     if (bin.size > MAX_FW_BYTES) return toast(`Plik jest za duży (maks. ${fmtSize(MAX_FW_BYTES)}).`, 'err');
     if (ino && ino.size > 1024 * 1024) return toast('Plik .ino jest za duży (maks. 1 MB).', 'err');
-    if (rels.some((r) => r.version === version)) return toast(`Wersja ${version} już jest na stronie. Podnieś FW_VERSION w programie.`, 'err');
-    if (onDev != null && version <= onDev) return toast(`Na urządzeniu jest już wersja ${onDev}. Nowa musi mieć wyższy numer, inaczej ESP32 jej nie pobierze.`, 'err');
+    if (rels.some((r) => r.version === version)) return toast(`Ta wersja (${fmtFwVersion(version)}) już jest na stronie. Wyeksportuj program jeszcze raz.`, 'err');
+    if (onDev != null && version <= onDev) return toast(`Na urządzeniu jest już wersja ${fmtFwVersion(onDev)}. Nowa musi być nowsza, inaczej ESP32 jej nie pobierze.`, 'err');
     if (info.version && info.version !== version) {
       if (!await confirmDialog('Inny numer wersji', `W pliku jest wersja ${info.version}, a wpisano ${version}. ESP32 po aktualizacji zgłosi ${info.version} i może pobierać plik w kółko. Wgrać mimo to?`, 'Wgraj mimo to')) return;
     }
@@ -1819,7 +1835,7 @@ async function tabFirmware(el, inv) {
         device_id: d.id, version, storage_path: `${base}.bin`, file_name: bin.name.slice(0, 200), size_bytes: bin.size,
         source_path: ino ? `${base}.ino` : null, source_name: ino ? ino.name.slice(0, 200) : null, notes: form.notes.value.trim() || null,
       }));
-      toast(`Wersja ${version} wgrana. ESP32 pobierze ją w ciągu minuty.`, 'ok');
+      toast(`Wersja ${fmtFwVersion(version)} wgrana. ESP32 pobierze ją w ciągu minuty.`, 'ok');
       tabFirmware(el, inv);
     } catch (err) {
       if (paths.length) await sb.storage.from(FW_BUCKET).remove(paths);
