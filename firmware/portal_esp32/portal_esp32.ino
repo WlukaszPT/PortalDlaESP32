@@ -5,12 +5,15 @@
 //    (11,8–13,2 V) i wysyła oba do bazy; counter idzie do bazy w całościach (23,3 -> 23),
 //  - o północy (czas polski z internetu) counter wraca do zera,
 //  - counter jest zapisywany w pamięci flash, więc po restarcie liczy dalej od tej samej wartości,
-//  - co 5 s pyta bazę o polecenia; przycisk „Uruchom przejście” na stronie (zakładka Urządzenia)
-//    ustawia tornOn = true, a wbudowana dioda świeci wtedy 10 s,
+//  - trzyma stałe połączenie WebSocket z Supabase Realtime: przycisk „Uruchom przejście” na stronie
+//    (zakładka Urządzenia) od razu ustawia tornOn = true i zapala diodę, a „Wyłącz przejście” ją gasi,
+//  - zabezpieczenie czasowe: jeśli nikt nie kliknie „Wyłącz przejście”, dioda gaśnie sama po 1 minucie,
+//  - dodatkowo co 30 s (bez połączenia Realtime co 5 s) pyta bazę o polecenia, na wypadek gdyby
+//    któreś nie dotarło przez WebSocket,
 //  - po dotknięciu palcem pinu dotykowego T0 (GPIO4, opisany na płytce D4) pobiera z bazy
 //    „Wiadomość serwera” (zakładka na stronie) i wypisuje ją w monitorze portu szeregowego;
 //    wiadomość nie jest przechowywana w pamięci ESP32, przy każdym dotyku pobierana jest od nowa,
-//  - wbudowana dioda miga co 1 s (podczas „Uruchom przejście” świeci ciągle 10 s,
+//  - wbudowana dioda miga co 1 s (podczas przejścia świeci ciągle,
 //    podczas pobierania nowego programu miga szybko),
 //  - co minutę pyta stronę, czy w zakładce Firmware jest nowsza wersja programu; jeśli tak,
 //    pobiera plik .bin przez HTTPS, zapisuje go we flashu i uruchamia się ponownie (OTA).
@@ -25,7 +28,8 @@
 //  with spiffs” (program do 1,25 MB) albo „Minimal SPIFFS (1.9MB APP with OTA)”.
 //  Pierwszy program z tą funkcją trzeba wgrać przez kabel USB.
 //
-// Wymagane biblioteki: ArduinoJson (Menedżer bibliotek, wersja 7.x).
+// Wymagane biblioteki (Menedżer bibliotek): ArduinoJson (wersja 7.x)
+// oraz WebSockets (autor Markus Sattler, wersja 2.6 lub nowsza).
 // Przed kompilacją skopiuj secrets.example.h jako secrets.h i uzupełnij dane.
 
 #include <WiFi.h>
@@ -36,6 +40,7 @@
 #include <time.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <WebSocketsClient.h>
 
 #include "secrets.h"
 #include "root_ca.h"
@@ -66,11 +71,16 @@ const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
 const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy dotknąć go palcem lub kablem
 
 const unsigned long READING_INTERVAL_MS = 60000;  // wysyłanie odczytu
-const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń
+const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń, gdy nie ma połączenia Realtime
+const unsigned long COMMAND_INTERVAL_LIVE_MS = 30000; // sprawdzanie poleceń przy działającym Realtime (zapas)
+const unsigned long TOPIC_RETRY_MS = 30000;       // ponowne pytanie o kanał Realtime po błędzie
+const unsigned long HEARTBEAT_MS = 25000;         // „jestem” wysyłane do Realtime (serwer wymaga co < 60 s)
+const unsigned long SILENCE_LIMIT_MS = 70000;     // tyle ciszy od serwera = zerwane połączenie, łączymy od nowa
+const long COMMAND_MAX_AGE_S = 60;                // starsze polecenie „włącz” (np. po braku zasilania) jest pomijane
 const unsigned long FIRMWARE_INTERVAL_MS = 60000; // sprawdzanie nowej wersji programu
 const int FIRMWARE_MAX_TRIES = 3;                 // tyle prób pobrania jednej wersji, potem odpuszczamy
 const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
-const float LED_ON_S = 10.0;  // świecenie diody po poleceniu ze strony
+const float SAFETY_OFF_S = 60.0;  // zabezpieczenie: przejście gaśnie samo po 1 minucie
 const float BLINK_S = 1.0;   // miganie diody: zmiana co 1 s
 const float BLINK_OTA_S = 0.1;  // szybkie miganie podczas aktualizacji
 
@@ -82,7 +92,8 @@ const int DAY_END_HOUR   = 19;  // od 19:00 counter rośnie o 0,3
 // Nazwy danych w bazie dla typu AllinOne (zakładka Urządzenia → wybór danych).
 const char* METRIC_COUNTER = "activations";      // Ilość uruchomień
 const char* METRIC_VOLTAGE = "battery_voltage";  // Napięcie akumulatora
-const char* CMD_TURN_ON    = "turn on";          // polecenie z przycisku na stronie
+const char* CMD_TURN_ON    = "turn on";          // przycisk „Uruchom przejście”
+const char* CMD_TURN_OFF   = "turn off";         // przycisk „Wyłącz przejście”
 
 // Counter liczony w dziesiątych częściach (10 = 1,0; 3 = 0,3), żeby uniknąć błędów zaokrągleń.
 long  counterTenths = 0;
@@ -103,10 +114,26 @@ volatile bool touchFlag = false;
 bool touchHeld = false;           // palec wciąż na pinie: nie wypisujemy drugi raz
 unsigned long touchChangedAt = 0;
 WiFiClientSecure tls;
-// Timery działają niezależnie od loop(), więc dioda miga i gaśnie po 10 s także wtedy,
+// Timery działają niezależnie od loop(), więc dioda miga i gaśnie po 1 minucie także wtedy,
 // gdy ESP32 czeka na odpowiedź bazy albo pobiera nowy program.
 Ticker ledOffTicker;
 Ticker blinkTicker;
+
+// Stałe połączenie z Supabase Realtime (WebSocket, kanał Broadcast tego urządzenia).
+WebSocketsClient ws;
+String rtTopic;               // nazwa kanału z bazy (device_realtime_topic), np. cloudea-1b9d…
+bool rtStarted = false;       // ws.begin… już wywołane (biblioteka sama łączy ponownie)
+bool rtJoined = false;        // kanał dołączony: polecenia przychodzą od razu
+unsigned long rtTopicTry = 0;
+unsigned long rtLastHeartbeat = 0;
+unsigned long rtLastMessage = 0;
+unsigned long rtRef = 0;
+String rtJoinRef;
+bool fetchSoon = false;       // pobierz polecenia z bazy przy najbliższym obiegu loop()
+
+// Ostatnie polecenia wykonane od razu z Realtime: przy pobraniu z bazy tylko je potwierdzamy.
+long handledIds[8] = {0};
+int handledPos = 0;
 
 // ───────────── Wi‑Fi ─────────────
 
@@ -232,6 +259,53 @@ void ackCommand(long id, bool ok, const char* result) {
   Serial.printf("Potwierdzenie polecenia %ld -> HTTP %d\n", id, code);
 }
 
+bool wasHandled(long id) {
+  for (long h : handledIds) if (h == id) return true;
+  return false;
+}
+
+void markHandled(long id) {
+  handledIds[handledPos] = id;
+  handledPos = (handledPos + 1) % 8;
+}
+
+// Czas utworzenia polecenia ("2026-11-01T10:53:03.95+00:00", UTC) w sekundach od 1970.
+long long parseUtc(const char* s) {
+  int y, mo, d, h, mi, sec;
+  if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec) != 6) return 0;
+  y -= mo <= 2;
+  long long era = (y >= 0 ? y : y - 399) / 400;
+  long long yoe = y - era * 400;
+  long long doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  long long days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+  return days * 86400 + h * 3600 + mi * 60 + sec;
+}
+
+// Wykonuje polecenie. Zwraca opis do potwierdzenia; ok = false, gdy polecenie nieznane lub pominięte.
+const char* runCommand(long id, JsonVariantConst payload, const char* createdAt, bool& ok) {
+  ok = true;
+  if (payload[CMD_TURN_OFF] == true) {
+    Serial.printf("Polecenie %ld: wyłącz przejście\n", id);
+    stopPassage();
+    return "przejście wyłączone";
+  }
+  if (payload[CMD_TURN_ON] == true) {
+    // Polecenie sprzed dłuższego czasu (np. ESP32 było wyłączone) nie zapala już diody.
+    time_t now = time(nullptr);
+    long long created = parseUtc(createdAt);
+    if (now > 1700000000 && created > 0 && now - created > COMMAND_MAX_AGE_S) {
+      Serial.printf("Polecenie %ld: włącz przejście – pominięte, wysłane %lld s temu\n", id, (long long)now - created);
+      ok = false;
+      return "pominięte: polecenie starsze niż 1 minuta";
+    }
+    Serial.printf("Polecenie %ld: włącz przejście\n", id);
+    turnOnLed();
+    return "przejście włączone (samo wyłączy się po 1 min)";
+  }
+  ok = false;
+  return "nieznane polecenie";
+}
+
 void checkCommands() {
   JsonDocument body;
   body["p_key"] = DEVICE_KEY;
@@ -251,13 +325,143 @@ void checkCommands() {
 
   for (JsonObject cmd : commands.as<JsonArray>()) {
     long id = cmd["id"];
-    if (cmd["payload"][CMD_TURN_ON] == true) {
-      Serial.printf("Polecenie %ld: włącz przejście\n", id);
-      turnOnLed();
-      ackCommand(id, true, "dioda włączona na 10 s");
-    } else {
-      ackCommand(id, false, "nieznane polecenie");
+    if (wasHandled(id)) {
+      // Już wykonane od razu po wiadomości z Realtime: tylko potwierdzamy w bazie.
+      ackCommand(id, true, "wykonane natychmiast (Realtime)");
+      continue;
     }
+    bool ok;
+    const char* result = runCommand(id, cmd["payload"].as<JsonVariantConst>(), cmd["created_at"].as<const char*>(), ok);
+    if (ok) markHandled(id);
+    ackCommand(id, ok, result);
+  }
+}
+
+// ───────────── Stałe połączenie (Supabase Realtime) ─────────────
+
+void rtSend(const char* topic, const char* event, JsonDocument& payload, const String& joinRef) {
+  JsonDocument msg;
+  msg["topic"] = topic;
+  msg["event"] = event;
+  msg["payload"] = payload;
+  msg["ref"] = String(++rtRef);
+  if (joinRef.length()) msg["join_ref"] = joinRef;
+  String text;
+  serializeJson(msg, text);
+  ws.sendTXT(text);
+}
+
+void rtJoin() {
+  JsonDocument payload;
+  payload["config"]["broadcast"]["self"] = false;
+  payload["config"]["broadcast"]["ack"] = false;
+  payload["config"]["presence"]["key"] = "";
+  payload["config"]["private"] = false;
+  payload["config"]["postgres_changes"].to<JsonArray>();
+  payload["access_token"] = SUPABASE_ANON_KEY;
+  rtJoinRef = String(rtRef + 1);
+  String topic = "realtime:" + rtTopic;
+  rtSend(topic.c_str(), "phx_join", payload, rtJoinRef);
+}
+
+void rtHandleText(const char* text, size_t len) {
+  rtLastMessage = millis();
+  JsonDocument doc;
+  if (deserializeJson(doc, text, len)) return;
+  const char* event = doc["event"] | "";
+
+  if (strcmp(event, "phx_reply") == 0) {
+    if (!rtJoined && rtJoinRef == (doc["ref"] | "")) {
+      const char* status = doc["payload"]["status"] | "";
+      if (strcmp(status, "ok") == 0) {
+        rtJoined = true;
+        fetchSoon = true;  // polecenia wysłane, gdy nie byliśmy połączeni
+        Serial.println("Realtime: połączono, polecenia ze strony docierają natychmiast");
+      } else {
+        Serial.printf("Realtime: odmowa dołączenia do kanału (%s)\n", text);
+      }
+    }
+  } else if (strcmp(event, "broadcast") == 0) {
+    JsonObject cmd = doc["payload"]["payload"];
+    long id = cmd["id"] | 0L;
+    if (id <= 0 || wasHandled(id)) return;
+    bool ok;
+    runCommand(id, cmd["payload"].as<JsonVariantConst>(), cmd["created_at"].as<const char*>(), ok);
+    if (ok) markHandled(id);
+    fetchSoon = true;  // potwierdzenie w bazie przez device_fetch_commands + device_ack_command
+  } else if (strcmp(event, "phx_error") == 0 || strcmp(event, "phx_close") == 0) {
+    Serial.println("Realtime: kanał zamknięty, łączę ponownie");
+    rtJoined = false;
+    ws.disconnect();
+  } else if (strcmp(event, "system") == 0 && strcmp(doc["payload"]["status"] | "", "error") == 0) {
+    Serial.printf("Realtime: błąd kanału (%s)\n", text);
+  }
+}
+
+void onWsEvent(WStype_t type, uint8_t* data, size_t len) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("Realtime: WebSocket otwarty, dołączam do kanału");
+      rtJoined = false;
+      rtLastMessage = rtLastHeartbeat = millis();
+      rtJoin();
+      break;
+    case WStype_DISCONNECTED:
+      if (rtJoined) Serial.println("Realtime: rozłączono, ponawiam");
+      rtJoined = false;
+      break;
+    case WStype_TEXT:
+      rtHandleText((const char*)data, len);
+      break;
+    default:
+      break;
+  }
+}
+
+// Pobiera nazwę kanału z bazy i otwiera WebSocket. Dalej biblioteka sama wznawia połączenie.
+void startRealtime() {
+  if (rtStarted || WiFi.status() != WL_CONNECTED) return;
+  unsigned long now = millis();
+  if (rtTopicTry != 0 && now - rtTopicTry < TOPIC_RETRY_MS) return;
+  rtTopicTry = now;
+
+  JsonDocument body;
+  body["p_key"] = DEVICE_KEY;
+  String response;
+  int code = callRpc("device_realtime_topic", body, response);
+  JsonDocument doc;
+  if (code != 200 || deserializeJson(doc, response) || !doc["topic"].is<const char*>()) {
+    Serial.printf("Realtime: brak kanału (HTTP %d %s), zostaję przy odpytywaniu co 5 s\n", code, response.c_str());
+    return;
+  }
+  rtTopic = doc["topic"].as<String>();
+
+  String host = SUPABASE_URL;
+  host.replace("https://", "");
+  host.replace("/", "");
+  String path = String("/realtime/v1/websocket?apikey=") + SUPABASE_ANON_KEY + "&vsn=1.0.0";
+  ws.beginSslWithCA(host.c_str(), 443, path.c_str(), ROOT_CA, "");
+  ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(5000);
+  rtStarted = true;
+}
+
+void realtimeLoop() {
+  if (!rtStarted) return;
+  ws.loop();
+  if (!ws.isConnected()) return;
+  unsigned long now = millis();
+  if (now - rtLastHeartbeat >= HEARTBEAT_MS) {
+    rtLastHeartbeat = now;
+    JsonDocument payload;
+    payload.to<JsonObject>();
+    rtSend("phoenix", "heartbeat", payload, "");
+  }
+  if (now - rtLastMessage > SILENCE_LIMIT_MS) {
+    Serial.println("Realtime: brak odpowiedzi serwera, łączę ponownie");
+    rtJoined = false;
+    rtLastMessage = now;
+    ws.disconnect();
   }
 }
 
@@ -430,7 +634,7 @@ void checkFirmware() {
 
 // ───────────── Dioda ─────────────
 
-// Co BLINK_S zmienia stan diody. Gdy trwa „przejście” (tornOn), dioda świeci ciągle.
+// Co BLINK_S zmienia stan diody. Gdy trwa przejście (tornOn), dioda świeci ciągle.
 void blinkTick() {
   if (tornOn) {
     digitalWrite(LED_PIN, HIGH);
@@ -444,17 +648,30 @@ void startBlink(float seconds) {
   blinkTicker.attach(seconds, blinkTick);
 }
 
-// Po 10 s „przejścia” dioda wraca do zwykłego migania.
+// Koniec przejścia: dioda wraca do zwykłego migania.
 void turnOffLed() {
   tornOn = false;
   digitalWrite(LED_PIN, LOW);
 }
 
-// Wywoływane po poleceniu ze strony: dioda świeci ciągle 10 s, potem znowu miga.
+// „Wyłącz przejście” ze strony: gasimy od razu i kasujemy odliczanie zabezpieczenia.
+void stopPassage() {
+  ledOffTicker.detach();
+  turnOffLed();
+}
+
+// Zabezpieczenie: nikt nie kliknął „Wyłącz przejście” przez minutę.
+void safetyOff() {
+  Serial.println("Zabezpieczenie: minęła 1 minuta, wyłączam przejście");
+  turnOffLed();
+}
+
+// „Uruchom przejście” ze strony: dioda świeci ciągle do „Wyłącz przejście”, najdłużej 1 minutę.
+// Kolejne „Uruchom” liczy minutę od nowa.
 void turnOnLed() {
   tornOn = true;
   digitalWrite(LED_PIN, HIGH);
-  ledOffTicker.once(LED_ON_S, turnOffLed);
+  ledOffTicker.once(SAFETY_OFF_S, safetyOff);
 }
 
 // ───────────── Program ─────────────
@@ -485,10 +702,15 @@ void loop() {
     lastReading = now;
     sendReading();
   }
-  if (now - lastCommandCheck >= COMMAND_INTERVAL_MS) {
-    lastCommandCheck = now;
+  startRealtime();
+  realtimeLoop();
+  unsigned long commandEvery = rtJoined ? COMMAND_INTERVAL_LIVE_MS : COMMAND_INTERVAL_MS;
+  if (fetchSoon || now - lastCommandCheck >= commandEvery) {
+    fetchSoon = false;
+    lastCommandCheck = millis();
     checkCommands();
   }
+  realtimeLoop();
   if (WiFi.status() == WL_CONNECTED &&
       (!firmwareChecked || now - lastFirmwareCheck >= FIRMWARE_INTERVAL_MS)) {
     firmwareChecked = true;
