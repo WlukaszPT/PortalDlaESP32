@@ -2,7 +2,7 @@
 
 Program testowy `portal_esp32/portal_esp32.ino` (płytka ESP32 DevKit, Arduino IDE):
 
-- co 60 s zwiększa `counter` (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3) i losuje `napiecie` (11,8–13,2 V), a potem wysyła je do bazy jako „Ilość uruchomień” (w całościach, np. 23,3 jako 23) i „Napięcie akumulatora”,
+- co 5 minut zwiększa `counter` (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3) i losuje `napiecie` (11,8–13,2 V), a potem wysyła je do bazy jako „Ilość uruchomień” (w całościach, np. 23,3 jako 23) i „Napięcie akumulatora”,
 - o północy (czas polski pobierany z internetu) zeruje `counter`,
 - `counter` zapisuje w pamięci flash, więc po restarcie albo zaniku zasilania liczy dalej (chyba że w międzyczasie minęła północ),
 - trzyma **stałe połączenie** (WebSocket z Supabase Realtime), więc przycisk **Uruchom przejście** w zakładce Urządzenia od razu ustawia `tornOn = true` i zapala wbudowaną niebieską diodę (GPIO2), a **Wyłącz przejście** od razu ją gasi,

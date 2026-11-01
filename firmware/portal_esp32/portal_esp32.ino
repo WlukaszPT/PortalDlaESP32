@@ -1,7 +1,7 @@
 // CloudEA – program testowy dla ESP32 (płytka ESP32 DevKit, Arduino IDE).
 //
 // Co robi:
-//  - co 60 s zwiększa "counter" (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3), losuje "napiecie"
+//  - co 5 minut zwiększa "counter" (od 7:00 do 19:00 o 1, od 19:00 do 7:00 o 0,3), losuje "napiecie"
 //    (11,8–13,2 V) i wysyła oba do bazy; counter idzie do bazy w całościach (23,3 -> 23),
 //  - o północy (czas polski z internetu) counter wraca do zera,
 //  - counter jest zapisywany w pamięci flash, więc po restarcie liczy dalej od tej samej wartości,
@@ -69,7 +69,7 @@ const char FW_TAG[] = "CLOUDEA_FW_BUILD=" __DATE__ " " __TIME__;
 const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
 const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy dotknąć go palcem lub kablem
 
-const unsigned long READING_INTERVAL_MS = 60000;  // wysyłanie odczytu
+const unsigned long READING_INTERVAL_MS = 300000; // wysyłanie odczytu co 5 minut
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń, gdy nie ma połączenia Realtime
 const unsigned long COMMAND_INTERVAL_LIVE_MS = 30000; // sprawdzanie poleceń przy działającym Realtime (zapas)
 const unsigned long TOPIC_RETRY_MS = 30000;       // ponowne pytanie o kanał Realtime po błędzie
