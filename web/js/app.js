@@ -834,8 +834,17 @@ function setStatus(node, lastSeen) {
   node.title = `Ostatni kontakt: ${fmtDate(lastSeen)}`;
 }
 
-// Polecenie „Uruchom przejście”: ESP32 odbiera je przez device_fetch_commands jako {"turn on": true}.
+// Polecenia „Uruchom przejście” {"turn on": true} i „Wyłącz przejście” {"turn off": true}.
+// ESP32 trzyma stałe połączenie (Supabase Realtime) i dostaje je od razu; po 1 minucie
+// bez „Wyłącz” sam gasi przejście (zabezpieczenie w programie ESP32).
 const RUN_KEY = 'turn on';
+const STOP_KEY = 'turn off';
+const isPassageCmd = (c) => c.payload?.[RUN_KEY] === true || c.payload?.[STOP_KEY] === true;
+function runLastHtml(c) {
+  if (!c) return 'Jeszcze nie uruchamiano ze strony.';
+  const what = c.payload?.[STOP_KEY] === true ? 'Wyłączono' : 'Uruchomiono';
+  return `${what}: ${esc(fmtDate(c.created_at))} · <span class="pill ${c.status}" title="${esc(c.result || '')}">${CMD_STATUS[c.status]}</span>`;
+}
 const CMD_STATUS = { new: 'oczekuje', received: 'odebrane', done: 'wykonane', failed: 'błąd' };
 
 function deviceCard(d, dms, readings, commands) {
@@ -855,7 +864,7 @@ function deviceCard(d, dms, readings, commands) {
   const last = readings.find((r) => r.device_id === d.id);
   const lastVal = {};
   ms.forEach((m) => { const r = readings.find((x) => x.device_id === d.id && x.data && m.key in x.data); if (r) lastVal[m.key] = r.data[m.key]; });
-  const lastRun = commands.find((c) => c.device_id === d.id && c.payload?.[RUN_KEY] === true);
+  const lastRun = commands.find((c) => c.device_id === d.id && isPassageCmd(c));
   const on = isOnline(d.last_seen);
 
   return `<article class="dev glass" data-dev="${d.id}">
@@ -875,8 +884,9 @@ function deviceCard(d, dms, readings, commands) {
       </div>`).join('')}
     </div>` : '<div class="hint" style="color:var(--muted);font-size:13px">Ten typ nie ma jeszcze zdefiniowanych danych.</div>'}
     <div class="run-row">
-      <button class="btn primary" type="button" data-admin data-run>${icon('play', 16)} Uruchom przejście</button>
-      <span class="run-last" data-run-last>${lastRun ? `Ostatnio: ${esc(fmtDate(lastRun.created_at))} · <span class="pill ${lastRun.status}">${CMD_STATUS[lastRun.status]}</span>` : 'Jeszcze nie uruchamiano ze strony.'}</span>
+      <button class="btn primary" type="button" data-admin data-run="${RUN_KEY}">${icon('play', 16)} Uruchom przejście</button>
+      <button class="btn danger" type="button" data-admin data-run="${STOP_KEY}">${icon('pause', 16)} Wyłącz przejście</button>
+      <span class="run-last" data-run-last>${runLastHtml(lastRun)}</span>
     </div>
     <div class="dev-foot"><span>Ostatni odczyt: ${last ? esc(fmtDate(last.created_at)) : 'brak'}</span><span class="spacer"></span><span>Dodano: ${esc(fmtDate(d.created_at))}</span></div>
   </article>`;
@@ -906,17 +916,33 @@ function bindDeviceCards(el, inv, devices) {
         } catch (e) { cb.checked = !cb.checked; fail(e); }
       };
     });
-    const run = card.querySelector('[data-run]');
-    if (!run) return;
-    run.onclick = async () => {
-      run.disabled = true;
-      try {
-        await q(sb.from('commands').insert({ device_id: d.id, payload: { [RUN_KEY]: true } }));
-        toast('Wysłano. Sterownik uruchomi przejście przy najbliższym połączeniu.', 'ok');
-        tabDevices(el, inv);
-      } catch (err) { run.disabled = false; fail(err); }
-    };
+    const runBtns = [...card.querySelectorAll('[data-run]')];
+    const last = card.querySelector('[data-run-last]');
+    runBtns.forEach((btn) => {
+      btn.onclick = async () => {
+        const key = btn.dataset.run;
+        runBtns.forEach((b) => { b.disabled = true; });
+        try {
+          const [cmd] = await q(sb.from('commands').insert({ device_id: d.id, payload: { [key]: true } }).select());
+          last.innerHTML = runLastHtml(cmd);
+          toast(key === STOP_KEY ? 'Wysłano „Wyłącz przejście”.' : 'Wysłano „Uruchom przejście”. Bez wyłączenia zgaśnie samo po 1 minucie.', 'ok');
+          watchCommand(cmd, last);
+        } catch (err) { fail(err); }
+        runBtns.forEach((b) => { b.disabled = false; });
+      };
+    });
   });
+}
+
+// Śledzi przez ok. 15 s, czy sterownik odebrał i wykonał polecenie, i odświeża napis pod przyciskami.
+async function watchCommand(cmd, node) {
+  for (let i = 0; i < 15 && document.body.contains(node); i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const { data } = await sb.from('commands').select('*').eq('id', cmd.id).maybeSingle();
+    if (!data || !document.body.contains(node)) return;
+    node.innerHTML = runLastHtml(data);
+    if (data.status === 'done' || data.status === 'failed') return;
+  }
 }
 
 // ── Zakładki: wykresy i dane rzeczywiste (te same odczyty, inny widok) ──

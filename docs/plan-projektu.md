@@ -8,7 +8,7 @@ Cel: strona www z bazą danych, która odbiera dane z ESP32 i wysyła do niego m
 - **Strona www: GitHub Pages** (statyczna strona HTML/JS z biblioteką `supabase-js`), hostowana z tego repozytorium.
 - **ESP32: Arduino IDE / PlatformIO**, biblioteki `WiFiClientSecure`, `HTTPClient`, `ArduinoJson`.
 - **Kierunek ESP32 → strona:** ESP32 wysyła odczyty (`POST`) do tabeli `readings`.
-- **Kierunek strona → ESP32:** strona zapisuje polecenie/dane do tabeli `commands`, ESP32 co kilka sekund pyta o nowe (`GET`), wykonuje je i oznacza jako odebrane.
+- **Kierunek strona → ESP32:** strona zapisuje polecenie/dane do tabeli `commands`, ESP32 dostaje je od razu przez stałe połączenie WebSocket (Supabase Realtime, kanał Broadcast; dodatkowo odpytuje bazę jako zapas), wykonuje je i oznacza jako wykonane.
 
 Uwaga: darmowy projekt Supabase jest wstrzymywany po ok. 7 dniach bez aktywności. Regularne zapisy z ESP32 zwykle temu zapobiegają, a wstrzymany projekt można wznowić jednym kliknięciem.
 

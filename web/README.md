@@ -16,7 +16,7 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 - **Pulpit** – liczba inwestycji i urządzeń, ile jest online, odczyty z 24 h, mapa i ostatnie odczyty.
 - **Inwestycje** – lista z wyszukiwaniem, dodawanie, edycja, usuwanie.
 - **Inwestycja** – zakładki:
-  - *Urządzenia*: dodawanie produktów, klucz `PL-…` do skopiowania, włączanie/wyłączanie danych, ostatnie wartości, przycisk „Uruchom przejście” (wysyła do ESP32 polecenie `{"turn on": true}`, które sterownik odbiera przez `device_fetch_commands`) ze statusem ostatniego uruchomienia,
+  - *Urządzenia*: dodawanie produktów, klucz `PL-…` do skopiowania, włączanie/wyłączanie danych, ostatnie wartości, przyciski „Uruchom przejście” i „Wyłącz przejście” (polecenia `{"turn on": true}` / `{"turn off": true}`, które ESP32 dostaje od razu przez stałe połączenie Realtime; bez wyłączenia przejście gaśnie samo po 1 minucie) ze statusem ostatniego polecenia odświeżanym na żywo,
   - *Wykresy*: wykresy danych liczbowych, zakres od 20 ostatnich odczytów (domyślnie) i ostatniej godziny do 30 dni, eksport CSV, typ wykresu rzeczywisty lub godzinowy (średnia z godziny, a dla liczników przyrost w godzinie),
   - *Dane rzeczywiste*: tabela wszystkich odczytów w wybranym zakresie, eksport CSV,
   - *Galeria*: karuzela do 5 zdjęć (prywatne, zmniejszane przed wysłaniem),
@@ -38,7 +38,7 @@ Statyczna strona (HTML, CSS, JavaScript bez kompilacji) korzystająca z Supabase
 | Wpisy serwisowe | dodaje, zmienia i usuwa wszystkie | dodaje, zmienia i usuwa własne |
 | Zdjęcia i dokumenty | dodaje, zmienia, usuwa | dodaje |
 | Inwestycje, lokalizacja, urządzenia, wybór danych | ✓ | – |
-| Uruchom przejście (polecenie dla ESP32) | ✓ | – |
+| Uruchom / Wyłącz przejście (polecenie dla ESP32) | ✓ | – |
 | Zarządzanie użytkownikami | ✓ | – |
 
 Uprawnienia pilnuje baza (reguły RLS), strona tylko ukrywa niedostępne przyciski.
