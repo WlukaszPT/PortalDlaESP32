@@ -13,7 +13,8 @@
 //  - po dotknięciu palcem pinu dotykowego T0 (GPIO4, opisany na płytce D4) pobiera z bazy
 //    „Wiadomość serwera” (zakładka na stronie) i wypisuje ją w monitorze portu szeregowego;
 //    wiadomość nie jest przechowywana w pamięci ESP32, przy każdym dotyku pobierana jest od nowa,
-//  - wbudowana dioda reaguje tylko na przyciski na stronie: świeci podczas przejścia, poza tym jest zgaszona,
+//  - wbudowana dioda świeci podczas przejścia (przyciski na stronie), poza tym jest zgaszona;
+//    jedyny wyjątek: podczas pobierania nowego programu (OTA) miga szybko,
 //  - co minutę pyta stronę, czy w zakładce Firmware jest nowsza wersja programu; jeśli tak,
 //    pobiera plik .bin przez HTTPS, zapisuje go we flashu i uruchamia się ponownie (OTA).
 //
@@ -80,6 +81,7 @@ const unsigned long FIRMWARE_INTERVAL_MS = 60000; // sprawdzanie nowej wersji pr
 const int FIRMWARE_MAX_TRIES = 3;                 // tyle prób pobrania jednej wersji, potem odpuszczamy
 const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
 const float SAFETY_OFF_S = 60.0;  // zabezpieczenie: przejście gaśnie samo po 1 minucie
+const float BLINK_OTA_S = 0.1;    // szybkie miganie diody podczas pobierania nowego programu
 
 // Czas polski (zimą CET, latem CEST) z serwerów NTP.
 const char* TIMEZONE = "CET-1CEST,M3.5.0,M10.5.0/3";
@@ -114,6 +116,7 @@ WiFiClientSecure tls;
 // Timer działa niezależnie od loop(), więc dioda gaśnie po 1 minucie także wtedy,
 // gdy ESP32 czeka na odpowiedź bazy albo pobiera nowy program.
 Ticker ledOffTicker;
+Ticker otaBlinkTicker;
 
 // Stałe połączenie z Supabase Realtime (WebSocket, kanał Broadcast tego urządzenia).
 WebSocketsClient ws;
@@ -570,6 +573,7 @@ bool downloadFirmware(long long version, long size) {
   String payload;
   serializeJson(body, payload);
 
+  startOtaBlink();
   int code = http.POST(payload);
   bool ok = false;
   if (code == 200) {
@@ -583,6 +587,7 @@ bool downloadFirmware(long long version, long size) {
   if (!ok) Update.abort();
   http.end();
   tls.stop();
+  stopOtaBlink();
 
   if (ok) {
     Serial.printf("OTA: wersja %lld zapisana, uruchamiam ponownie\n", version);
@@ -628,7 +633,22 @@ void checkFirmware() {
 
 // ───────────── Dioda ─────────────
 
-// Dioda świeci tylko podczas przejścia; poza tym jest zgaszona.
+// Dioda świeci tylko podczas przejścia; poza tym jest zgaszona (oprócz migania przy OTA).
+
+void otaBlinkTick() {
+  digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+}
+
+// Pobieranie nowego programu: dioda miga szybko, niezależnie od loop().
+void startOtaBlink() {
+  otaBlinkTicker.attach(BLINK_OTA_S, otaBlinkTick);
+}
+
+// Koniec pobierania (np. nieudanego): dioda wraca do stanu przejścia.
+void stopOtaBlink() {
+  otaBlinkTicker.detach();
+  digitalWrite(LED_PIN, tornOn ? HIGH : LOW);
+}
 
 // Koniec przejścia: dioda gaśnie.
 void turnOffLed() {

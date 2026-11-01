@@ -10,7 +10,7 @@ Program testowy `portal_esp32/portal_esp32.ino` (płytka ESP32 DevKit, Arduino I
 - dodatkowo pyta bazę o polecenia co 30 s (bez połączenia Realtime co 5 s), na wypadek gdyby coś nie dotarło przez WebSocket; polecenie „włącz” starsze niż minuta (np. wysłane, gdy płytka była wyłączona) jest pomijane.
 - po dotknięciu palcem pinu dotykowego **D4 (GPIO4, T0)** pobiera z bazy **Wiadomość serwera** (zakładka w inwestycji na stronie) i wypisuje ją w monitorze portu szeregowego (nie przechowuje jej w pamięci, przy każdym dotyku pobiera od nowa), np. `>>> Wiadomość serwera: Zachowaj ostrożność`. Jeden dotyk = jeden komunikat; kolejny po zabraniu palca. Podczas startu płytki nie dotykaj tego pinu (program mierzy wtedy jego wartość spoczynkową).
 
-- wbudowana dioda (GPIO2) reaguje tylko na przyciski na stronie: świeci podczas przejścia (do „Wyłącz” albo najdłużej 1 minutę), poza tym jest zgaszona (nie miga, także podczas pobierania nowego programu),
+- wbudowana dioda (GPIO2) reaguje tylko na przyciski na stronie: świeci podczas przejścia (do „Wyłącz” albo najdłużej 1 minutę), poza tym jest zgaszona; miga szybko (co 0,1 s) tylko podczas pobierania nowego programu,
 - co minutę pyta stronę (`device_check_firmware`), czy w zakładce **Firmware** jest nowsza wersja niż wkompilowana `FW_VERSION` (data kompilacji); jeśli tak, pobiera plik .bin przez HTTPS (funkcja `device-firmware`), zapisuje go we flashu i uruchamia się ponownie. Jedna wersja jest próbowana najwyżej 3 razy.
 
 ## Zdalna aktualizacja (OTA)
