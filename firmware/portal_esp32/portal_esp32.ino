@@ -10,9 +10,6 @@
 //  - zabezpieczenie czasowe: jeśli nikt nie kliknie „Wyłącz przejście”, dioda gaśnie sama po 1 minucie,
 //  - dodatkowo co 30 s (bez połączenia Realtime co 5 s) pyta bazę o polecenia, na wypadek gdyby
 //    któreś nie dotarło przez WebSocket,
-//  - po dotknięciu palcem pinu dotykowego T0 (GPIO4, opisany na płytce D4) pobiera z bazy
-//    „Wiadomość serwera” (zakładka na stronie) i wypisuje ją w monitorze portu szeregowego;
-//    wiadomość nie jest przechowywana w pamięci ESP32, przy każdym dotyku pobierana jest od nowa,
 //  - wbudowana dioda świeci podczas przejścia (przyciski na stronie), poza tym jest zgaszona;
 //    jedyny wyjątek: podczas pobierania nowego programu (OTA) miga szybko,
 //  - co minutę pyta stronę, czy w zakładce Firmware jest nowsza wersja programu; jeśli tak,
@@ -68,7 +65,6 @@ const long long FW_VERSION = fwBuild(__DATE__, __TIME__);
 const char FW_TAG[] = "CLOUDEA_FW_BUILD=" __DATE__ " " __TIME__;
 
 const int LED_PIN = 2;  // ESP32 DevKit (DOIT V1): niebieska dioda na GPIO2
-const int TOUCH_PIN = T0;  // pin dotykowy T0 = GPIO4 (na płytce D4); wystarczy dotknąć go palcem lub kablem
 
 const unsigned long READING_INTERVAL_MS = 300000; // wysyłanie odczytu co 5 minut
 const unsigned long COMMAND_INTERVAL_MS = 5000;   // sprawdzanie poleceń, gdy nie ma połączenia Realtime
@@ -79,7 +75,6 @@ const unsigned long SILENCE_LIMIT_MS = 70000;     // tyle ciszy od serwera = zer
 const long COMMAND_MAX_AGE_S = 60;                // starsze polecenie „włącz” (np. po braku zasilania) jest pomijane
 const unsigned long FIRMWARE_INTERVAL_MS = 60000; // sprawdzanie nowej wersji programu
 const int FIRMWARE_MAX_TRIES = 3;                 // tyle prób pobrania jednej wersji, potem odpuszczamy
-const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
 const float SAFETY_OFF_S = 60.0;  // zabezpieczenie: przejście gaśnie samo po 1 minucie
 const float BLINK_OTA_S = 0.1;    // szybkie miganie diody podczas pobierania nowego programu
 
@@ -107,11 +102,6 @@ unsigned long lastCommandCheck = 0;
 unsigned long lastFirmwareCheck = 0;
 bool firmwareChecked = false;  // pierwsze sprawdzenie zaraz po połączeniu z Wi-Fi
 
-uint16_t touchThreshold = 0;      // poniżej tej wartości touchRead() uznajemy pin za dotknięty
-// Przerwanie od pinu dotykowego zaznacza dotyk także wtedy, gdy loop() czeka na bazę.
-volatile bool touchFlag = false;
-bool touchHeld = false;           // palec wciąż na pinie: nie wypisujemy drugi raz
-unsigned long touchChangedAt = 0;
 WiFiClientSecure tls;
 // Timer działa niezależnie od loop(), więc dioda gaśnie po 1 minucie także wtedy,
 // gdy ESP32 czeka na odpowiedź bazy albo pobiera nowy program.
@@ -464,77 +454,6 @@ void realtimeLoop() {
   }
 }
 
-// ───────────── Wiadomość serwera ─────────────
-
-// Wywoływane po dotknięciu pinu: pobiera aktualną wiadomość z bazy i od razu ją wypisuje.
-void showServerMessage() {
-  Serial.println(">>> Dotyk: pobieram wiadomość serwera...");
-  JsonDocument body;
-  body["p_key"] = DEVICE_KEY;
-
-  String response;
-  int code = callRpc("device_get_message", body, response);
-  if (code != 200) {
-    Serial.printf(">>> Nie udało się pobrać wiadomości: HTTP %d %s\n", code, response.c_str());
-    return;
-  }
-
-  JsonDocument doc;
-  if (deserializeJson(doc, response)) {
-    Serial.println(">>> Nie udało się pobrać wiadomości: niepoprawny JSON");
-    return;
-  }
-  const char* message = doc["message"] | "";
-  if (message[0] == '\0') {
-    Serial.println(">>> Brak wiadomości serwera");
-  } else {
-    Serial.printf(">>> Wiadomość serwera: %s\n", message);
-  }
-}
-
-void IRAM_ATTR onTouch() {
-  touchFlag = true;
-}
-
-// Mierzy pin, gdy nikt go nie dotyka (przy starcie), i ustawia próg na 2/3 tej wartości.
-void calibrateTouch() {
-  uint32_t sum = 0;
-  for (int i = 0; i < 16; i++) {
-    sum += touchRead(TOUCH_PIN);
-    delay(10);
-  }
-  uint16_t base = sum / 16;
-  touchThreshold = base * 2 / 3;
-  Serial.printf("Pin dotykowy GPIO4: spoczynek %u, próg %u\n", base, touchThreshold);
-  touchAttachInterrupt(TOUCH_PIN, onTouch, touchThreshold);
-}
-
-// Jeden dotyk = jedna wiadomość. Kolejna dopiero po zabraniu palca (z odczekaniem debounce).
-void checkTouch() {
-  bool touched = touchRead(TOUCH_PIN) < touchThreshold;
-  unsigned long now = millis();
-
-  if (!touchHeld && (touchFlag || touched)) {
-    if (touchChangedAt == 0) touchChangedAt = now;
-    // Krótki dotyk w trakcie zapytania do bazy złapało przerwanie, więc liczy się od razu.
-    if (touchFlag && !touched) touchChangedAt = now - TOUCH_DEBOUNCE_MS;
-    if (now - touchChangedAt >= TOUCH_DEBOUNCE_MS) {
-      touchHeld = true;
-      touchChangedAt = 0;
-      showServerMessage();
-    }
-  } else if (touchHeld && !touched) {
-    if (touchChangedAt == 0) touchChangedAt = now;
-    if (now - touchChangedAt >= TOUCH_DEBOUNCE_MS) {
-      touchHeld = false;
-      touchChangedAt = 0;
-    }
-  } else {
-    touchChangedAt = 0;
-  }
-  touchFlag = false;
-}
-
 // ───────────── Zdalna aktualizacja (OTA) ─────────────
 
 // Przekazuje pobierane bajty prosto do zapisu we flashu (HTTPClient::writeToStream
@@ -687,15 +606,12 @@ void setup() {
   randomSeed(esp_random());
   loadCounter();
 
-  calibrateTouch();  // nie dotykaj pinu GPIO4 podczas startu
-
   tls.setCACert(ROOT_CA);
   connectWiFi();
   configTzTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 }
 
 void loop() {
-  checkTouch();
   connectWiFi();
   unsigned long now = millis();
 
@@ -718,7 +634,6 @@ void loop() {
     lastFirmwareCheck = now;
     checkFirmware();
   }
-  checkTouch();
 
   delay(50);
 }
