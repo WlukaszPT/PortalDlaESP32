@@ -690,7 +690,6 @@ const TABS = [
   ['galeria', 'Galeria', 'image'],
   ['lokalizacja', 'Lokalizacja', 'pin'],
   ['serwis', 'Serwis', 'wrench'],
-  ['wiadomosc', 'Wiadomość serwera', 'send'],
   ['dokumentacja', 'Dokumentacja', 'file'],
   ['firmware', 'Firmware', 'cpu'],
 ];
@@ -699,8 +698,8 @@ async function pageInvestment(root, id, tab) {
   const inv = await q(sb.from('investments').select('*').eq('id', id).maybeSingle());
   if (!inv) { root.innerHTML = `<div class="panel glass"><h2>Nie znaleziono inwestycji</h2><a class="btn" href="#/inwestycje">Wróć do listy</a></div>`; return; }
   document.title = `${inv.name} · CloudEA`;
-  // Zakładkę „Wiadomość serwera” widzi tylko właściciel portalu, a „Firmware” administrator.
-  const tabs = TABS.filter(([k]) => (k !== 'wiadomosc' || state.isOwner) && (k !== 'firmware' || isAdmin()));
+  // Zakładkę „Firmware” widzi tylko administrator.
+  const tabs = TABS.filter(([k]) => k !== 'firmware' || isAdmin());
   if (!tabs.some(([k]) => k === tab)) tab = 'urzadzenia';
 
   root.innerHTML = `
@@ -721,7 +720,6 @@ async function pageInvestment(root, id, tab) {
   else if (tab === 'galeria') await tabGallery(el, inv);
   else if (tab === 'lokalizacja') await tabLocation(el, inv);
   else if (tab === 'serwis') await tabService(el, inv);
-  else if (tab === 'wiadomosc') tabMessage(el, inv);
   else if (tab === 'dokumentacja') await tabDocuments(el, inv);
   else if (tab === 'firmware') await tabFirmware(el, inv);
   else await tabDevices(el, inv);
@@ -1563,44 +1561,6 @@ async function tabService(el, inv) {
       try { await q(sb.from('service_entries').delete().eq('id', entry.id)); tabService(el, inv); } catch (err) { fail(err); }
     };
   });
-}
-
-// ── Zakładka: wiadomość serwera ──
-
-// Tekst, który ESP32 tej inwestycji wypisuje w monitorze portu szeregowego po dotknięciu pinu dotykowego.
-// Zakładka tylko dla właściciela portalu.
-function tabMessage(el, inv) {
-  const msg = inv.server_message || '';
-  el.innerHTML = `
-    <div class="panel glass">
-      <h2>Wiadomość serwera</h2>
-      <p class="hint">Po dotknięciu palcem pinu dotykowego D4 (GPIO4) urządzenie ESP32 tej inwestycji pobiera tę wiadomość z serwera i wypisuje ją w monitorze portu szeregowego.</p>
-      <form id="msg-form" class="list">
-        <label class="lbl">Treść wiadomości
-          <textarea class="inp" name="message" maxlength="500" placeholder="np. Zachowaj ostrożność" style="min-height:110px;resize:vertical">${esc(msg)}</textarea></label>
-        <div class="svc-actions">
-          <span class="sub" style="margin-right:auto">${inv.server_message_at ? `Zmieniono ${esc(fmtDate(inv.server_message_at))}` : 'Wiadomość nie była jeszcze ustawiona.'}</span>
-          <span class="counter" data-count>${msg.length} / 500</span>
-          <button class="btn" type="button" data-clear ${msg ? '' : 'disabled'}>${icon('trash', 16)} Wyczyść</button>
-          <button class="btn primary" type="submit">${icon('send', 16)} Zapisz wiadomość</button>
-        </div>
-      </form>
-    </div>`;
-
-  const form = el.querySelector('#msg-form');
-  const count = form.querySelector('[data-count]');
-  form.message.oninput = () => { count.textContent = `${form.message.value.length} / 500`; };
-  const save = async (text) => {
-    try {
-      const patch = { server_message: text || null, server_message_at: new Date().toISOString() };
-      await q(sb.from('investments').update(patch).eq('id', inv.id));
-      Object.assign(inv, patch);
-      toast(text ? 'Wiadomość zapisana.' : 'Wiadomość usunięta.', 'ok');
-      tabMessage(el, inv);
-    } catch (err) { fail(err); }
-  };
-  form.onsubmit = (e) => { e.preventDefault(); save(form.message.value.trim()); };
-  form.querySelector('[data-clear]').onclick = () => save('');
 }
 
 // ── Zakładka: dokumentacja ──
