@@ -13,8 +13,7 @@
 //  - po dotknięciu palcem pinu dotykowego T0 (GPIO4, opisany na płytce D4) pobiera z bazy
 //    „Wiadomość serwera” (zakładka na stronie) i wypisuje ją w monitorze portu szeregowego;
 //    wiadomość nie jest przechowywana w pamięci ESP32, przy każdym dotyku pobierana jest od nowa,
-//  - wbudowana dioda miga co 1 s (podczas przejścia świeci ciągle,
-//    podczas pobierania nowego programu miga szybko),
+//  - wbudowana dioda reaguje tylko na przyciski na stronie: świeci podczas przejścia, poza tym jest zgaszona,
 //  - co minutę pyta stronę, czy w zakładce Firmware jest nowsza wersja programu; jeśli tak,
 //    pobiera plik .bin przez HTTPS, zapisuje go we flashu i uruchamia się ponownie (OTA).
 //
@@ -81,8 +80,6 @@ const unsigned long FIRMWARE_INTERVAL_MS = 60000; // sprawdzanie nowej wersji pr
 const int FIRMWARE_MAX_TRIES = 3;                 // tyle prób pobrania jednej wersji, potem odpuszczamy
 const unsigned long TOUCH_DEBOUNCE_MS = 50;       // tyle musi trwać dotyk/puszczenie, żeby się liczyło
 const float SAFETY_OFF_S = 60.0;  // zabezpieczenie: przejście gaśnie samo po 1 minucie
-const float BLINK_S = 1.0;   // miganie diody: zmiana co 1 s
-const float BLINK_OTA_S = 0.1;  // szybkie miganie podczas aktualizacji
 
 // Czas polski (zimą CET, latem CEST) z serwerów NTP.
 const char* TIMEZONE = "CET-1CEST,M3.5.0,M10.5.0/3";
@@ -114,10 +111,9 @@ volatile bool touchFlag = false;
 bool touchHeld = false;           // palec wciąż na pinie: nie wypisujemy drugi raz
 unsigned long touchChangedAt = 0;
 WiFiClientSecure tls;
-// Timery działają niezależnie od loop(), więc dioda miga i gaśnie po 1 minucie także wtedy,
+// Timer działa niezależnie od loop(), więc dioda gaśnie po 1 minucie także wtedy,
 // gdy ESP32 czeka na odpowiedź bazy albo pobiera nowy program.
 Ticker ledOffTicker;
-Ticker blinkTicker;
 
 // Stałe połączenie z Supabase Realtime (WebSocket, kanał Broadcast tego urządzenia).
 WebSocketsClient ws;
@@ -574,7 +570,6 @@ bool downloadFirmware(long long version, long size) {
   String payload;
   serializeJson(body, payload);
 
-  startBlink(BLINK_OTA_S);
   int code = http.POST(payload);
   bool ok = false;
   if (code == 200) {
@@ -588,7 +583,6 @@ bool downloadFirmware(long long version, long size) {
   if (!ok) Update.abort();
   http.end();
   tls.stop();
-  startBlink(BLINK_S);
 
   if (ok) {
     Serial.printf("OTA: wersja %lld zapisana, uruchamiam ponownie\n", version);
@@ -634,21 +628,9 @@ void checkFirmware() {
 
 // ───────────── Dioda ─────────────
 
-// Co BLINK_S zmienia stan diody. Gdy trwa przejście (tornOn), dioda świeci ciągle.
-void blinkTick() {
-  if (tornOn) {
-    digitalWrite(LED_PIN, HIGH);
-  } else {
-    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-  }
-}
+// Dioda świeci tylko podczas przejścia; poza tym jest zgaszona.
 
-void startBlink(float seconds) {
-  blinkTicker.detach();
-  blinkTicker.attach(seconds, blinkTick);
-}
-
-// Koniec przejścia: dioda wraca do zwykłego migania.
+// Koniec przejścia: dioda gaśnie.
 void turnOffLed() {
   tornOn = false;
   digitalWrite(LED_PIN, LOW);
@@ -682,7 +664,6 @@ void setup() {
   Serial.printf("CloudEA, wersja programu %lld (%s)\n", FW_VERSION, FW_TAG);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
-  startBlink(BLINK_S);
   randomSeed(esp_random());
   loadCounter();
 
